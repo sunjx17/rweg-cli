@@ -1,0 +1,63 @@
+# rweg 项目配置 —— 放在项目根，cwd 在这里时生效
+#
+# 例：d:\nginx\2dsim\rweg.toml
+#   → 数据库落在 d:\nginx\2dsim\.db\<namespace>.db
+#   → cd 到它的子目录跑（若 RWEG_WALKUP 深度够）仍是同一个 db，不跟着 cwd 漂
+#
+# ⚠️ 本文件里的相对路径都相对于**本文件所在目录**解析，不是 cwd。
+# ⚠️ 建议只写你要改的键（通常就[db] dir 一行），保持文件短。
+#
+# 查找顺序：
+#   1. $RWEG_CONFIG          显式指定，最高优先级
+#   2. ./rweg.toml            cwd
+#   3. ../rweg.toml ...       向上 $RWEG_WALKUP 级父目录
+#   4. $RWEG_HOME/rweg.toml   安装级默认
+#   5. 内置默认值             基准同样是 $RWEG_HOME
+#
+# 在子目录也能用到本配置的做法（不进本文件，用环境变量）：
+#   export RWEG_WALKUP=1     # cwd + 父目录
+#   export RWEG_WALKUP=2     # cwd + 父 + 祖父
+#   RWEG_WALKUP=3 read -f ... # 单次调用
+
+[db]
+# 数据库目录。相对本文件所在目录。
+dir = ".db/"
+
+# 数据库文件 = <dir>/<namespace>.db，每个终端一个。
+# 换 harness 只需改 dir 一行 —— 锚点语义与 harness 无关，
+# 同一份 canon_version + probe_stride 下不同 harness 读同一文件得到相同锚点。
+#
+# 想放别处：
+#   dir = ".dsh/rwegdb/"       # DeepSeek Harness 习惯位置
+#   dir = "../.rweg-db/"       # 集中到仓库上一层，多项目共用一个库目录
+#   dir = "D:/rweg-db/2dsim/"  # 绝对路径，锁到固定盘
+
+# ── 以下通常不用改，需要时取消注释 ──────────────────────────────────
+# busy_timeout_ms = 3000
+# journal_mode = "WAL"
+
+# [namespace]
+# ttl_hours = 24
+# gc_interval_minutes = 60
+# strict_cwd = true
+
+# [hash]
+# ⚠️ 与安装级/参考实现不一致会导致锚点对不上，除非你要的就是隔离
+# canon_version = 2
+# probe_stride = 3907
+
+# [read]
+# max_line_bytes = 6000
+# max_lines = 20000
+
+# [edit]
+# max_changes = 32
+# served_echo_cap = 150
+
+# [grep]
+# rg_path = ""            # 绝对路径锁定 rg 版本
+# fallback_to_rg = true
+
+# [output]
+# encoding = "utf-8"
+# newline = "preserve"

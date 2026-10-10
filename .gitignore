@@ -1,0 +1,226 @@
+# ── 1. 归档─────────────────────────────────────────────
+.trash/
+
+# ── 2. 构建产物（本项目）─────────────────────────────────────────────────
+/core-rweg
+/rweg
+*.exe
+*.test
+
+# 通用构建目录（各语言生态通用的名字）
+/dist/
+/build/
+/out/
+/obj/
+build/
+dist/
+out/
+obj/
+target/
+bin/
+
+# ── 3. 运行时派生数据 ────────────────────────────────────────────────────
+.db/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# 原子写残留
+.*.rweg-*
+
+# ── 4. 临时文件与备份 ────────────────────────────────────────────────────
+.temp/
+tmp/
+temp/
+.tmp/
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+*.orig
+*.rej
+*.save
+*.part
+*.partial
+*~
+
+# ── 5. 日志、性能与覆盖率 ────────────────────────────────────────────────
+logs/
+*.log
+*.out
+*.prof
+*.pprof
+*.trace
+coverage.txt
+coverage.html
+coverage.xml
+*.cover
+lcov.info
+
+# ── 6. 敏感信息与本地私有配置 ────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+!.env.sample
+*.local
+*.private
+*.secret
+*credentials*
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+id_rsa*
+id_ed25519*
+.npmrc
+.netrc
+
+# ── 7. 编辑器 / IDE / Agent ──────────────────────────────────────────────────────
+.workbuddy/
+.zcode/
+.dsh/
+.idea/
+.trae/
+*.iml
+*.ipr
+*.iws
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+# Vim / Neovim
+*.swp
+*.swo
+*.swx
+.vim/
+.nvim/
+session.vim
+# Emacs / Helix / Zed / Sublime / JetBrains LSP
+*#
+.#*
+.history/
+.helix/
+.zed/
+*.sublime-project
+*.sublime-workspace
+.jdtls/
+
+# ── 8. 操作系统 ──────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+*.lnk
+*.stackdump
+
+# ── 9. 语言 / 工具生态──────────────────────
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+ENV/
+.python-version
+.pytest_cache/
+.mypy_cache/
+.pytype/
+.ruff_cache/
+.tox/
+.nox/
+*.egg
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Node / 前端
+node_modules/
+.npm/
+.pnpm-store/
+.yarn/
+.eslintcache
+.stylelintcache
+.parcel-cache/
+.next/
+.nuxt/
+.output/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Rust
+target/
+*.rs.bk
+
+# Java / Kotlin / Gradle / Maven
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+.gradle/
+hs_err_pid*
+replay_pid*
+
+# C / C++ / 汇编
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.dSYM/
+*.idb
+*.ilk
+*.exp
+*.gcda
+*.gcno
+*.gcov
+
+# Go
+go.work
+go.work.sum
+*.prof
+
+# 打包与压缩产物
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.tar.bz2
+*.tar.xz
+*.7z
+*.rar
+*.gz
+*.bz2
+
+# ── 10. 反向排除 ────────────────────────────────
+!README.md
+!LICENSE
+!LICENSE.*
+!.gitignore
+!go.mod
+!go.sum
+!rweg.toml
+!*.toml
+!*.md
+!*.sh
+!*.go

@@ -1,0 +1,48 @@
+# rweg 项目配置 —— rweg 仓库自身用
+#
+# 这是「项目级配置」的标准示例：只写要改的键，其余走安装级默认
+#（$RWEG_HOME/rweg.toml）+ 内置默认值。
+#
+# 查找顺序：
+#   1. $RWEG_CONFIG显式指定，最高优先级
+#   2. ./rweg.toml              ← 本文件（cwd 在仓库内时生效）
+#   3. ../rweg.toml ...         向上 $RWEG_WALKUP 级父目录（默认 0 = 不向父级找）
+#   4. $RWEG_HOME/rweg.toml     安装级默认
+#   5. 内置默认值基准是 $RWEG_HOME
+#
+# ⚠️ 相对路径相对于**本文件所在目录**，不是 cwd。
+# ⚠️ 查找深度只能由 $RWEG_WALKUP 决定，不能写进本文件。
+
+[db]
+# 数据库目录 → <repo>/.db/<namespace>.db
+dir = ".db/"
+
+# ── 以下按需取消注释 ────────────────────────────────────────────────
+# busy_timeout_ms = 3000
+# journal_mode = "WAL"
+
+# [namespace]
+# ttl_hours = 24
+# gc_interval_minutes = 60
+# strict_cwd = true
+
+# [hash]
+# ⚠️ 与参考实现不一致会导致锚点对不上
+# canon_version = 2
+# probe_stride = 3907
+
+# [read]
+# max_line_bytes = 6000
+# max_lines = 20000
+
+# [edit]
+# max_changes = 32
+# served_echo_cap = 150
+
+# [grep]
+# rg_path = ""
+# fallback_to_rg = true
+
+# [output]
+# encoding = "utf-8"
+# newline = "preserve"

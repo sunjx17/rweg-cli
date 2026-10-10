@@ -1,0 +1,60 @@
+# rweg 安装级默认配置
+#
+# 装在 $RWEG_HOME/rweg.toml（默认 ~/.rweg/rweg.toml）。
+# **只在 cwd 及其指定父级深度内都没有 rweg.toml 时才生效**。
+#
+# 查找顺序（每个工具每次调用都独立查找，找不到就用内置默认值，不报错、不阻塞）：
+#   1. $RWEG_CONFIG         环境变量指定的路径（不存在则报错，因为是你明确指定的）
+#   2. ./rweg.toml          当前目录
+#   3. ../rweg.toml ...     向上 $RWEG_WALKUP 级父目录
+#                          RWEG_WALKUP=0（缺省）→ 只找 cwd
+#                          RWEG_WALKUP=1         → cwd + 父目录
+#                          RWEG_WALKUP=2         → cwd + 父 + 祖父
+#                          上限 32
+#   4. $RWEG_HOME/rweg.toml 本文件
+#   5. 内置默认值           相对路径基准同样是 $RWEG_HOME
+#
+# ⚠️ 所有相对路径都相对于「本文件所在目录」解析，不是 cwd。
+# ⚠️ 查找深度只由 $RWEG_WALKUP 决定，**不能写在本文件里**——
+#    查找行为发生在读到任何配置之前，写进来会形成循环依赖。
+
+[db]
+# 数据库**目录**。相对路径相对于本文件所在目录（即 $RWEG_HOME）。
+# 数据库文件 = <dir>/<namespace>.db —— 每个终端一个库文件，跨终端零竞争。
+#
+# 刻意不提供固定文件名选项：一旦多个 namespace 指向同一个库文件，
+# 就会重新引入 served 状态的跨终端竞争。
+# 要让多个终端共享 served，显式复用同一个 $RWEG_NS 即可。
+dir = "db/"
+busy_timeout_ms = 3000
+journal_mode = "WAL"
+
+[namespace]
+# namespace 生命周期 = 终端生命周期（存在 $RWEG_NS 里，终端关闭即消失）。
+# 24h 足够覆盖「终端休眠一夜」，同时不让垃圾堆积。-1 = 永久保留。
+ttl_hours = 24
+gc_interval_minutes = 60 # 惰性 GC 间隔，避免每次调用都扫全表
+strict_cwd = true # ns 的 cwd 与当前 cwd 不符时拒绝（防跨项目串锚点）
+
+[hash]
+# canon_version 与 probe_stride 决定锚点值。
+# 改动任一项 → 旧快照自动失效（快照键含这两个字段），不会串。
+# 要与 dsh-better-edit / pi-hashline-edit 保持一致就保持这两个默认值。
+canon_version = 2
+probe_stride = 3907
+
+[read]
+max_line_bytes = 6000 # 单行超此值只给标记，不给锚点（锚点需要完整行）
+max_lines = 20000     # 单文件行数上限，超出截断并标 truncated
+
+[edit]
+max_changes = 32      # 单次 -c 数量上限（同文件原子批量）
+served_echo_cap = 150 # 拒绝时回传的行数上限（超出部分省略并给出继续提示）
+
+[grep]
+rg_path = ""           # 空 = 从 PATH 找 rg；也可填绝对路径锁定版本
+fallback_to_rg = true  # rg 不可用或报错时，退化为原生 rg 行为（透传）
+
+[output]
+encoding = "utf-8"
+newline = "preserve" # preserve = 写回时保持原文件的行尾（LF / CRLF）
