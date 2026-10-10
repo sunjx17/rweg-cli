@@ -35,13 +35,13 @@ func dispatch(tool Tool, args []string) error {
 	switch tool {
 	case ToolCore:
 		return runCore(args)
-	case ToolRead, ToolWrte, ToolEdit, ToolGrep, ToolUndo:
+	case ToolRead, ToolWrte, ToolEdit, ToolGrep, ToolUndo, ToolAppend, ToolPrepend:
 		return runTool(tool, args)
 	}
 	return UsageErr("unknown tool %q", tool)
 }
 
-// runTool 处理 read/write/edit/grep/undo。
+// runTool 处理 read/write/edit/grep/undo/append/prepend。
 //
 // grep 走自己的路径：`-v`（invert-match）、`-q`（quiet）、`-c`（count）
 // 对 rg 都有意义，若是先过通用 flag 解析就会被吃掉；
@@ -79,6 +79,8 @@ func runTool(tool Tool, args []string) error {
 		return runEdit(c, rest)
 	case ToolUndo:
 		return runUndo(c, rest)
+	case ToolAppend, ToolPrepend:
+		return runInsert(c, rest)
 	}
 	return UsageErr("unknown tool %q", tool)
 }
@@ -249,7 +251,7 @@ GNU 习惯的两个兼容点：
 		return `undo [FILE]
 undo -f FILE
 
-把 FILE 退回上一次 write / edit 之前：内容按当时磁盘上的**原始字节**恢复
+把 FILE 退回上一次改动（write / edit / append / prepend）之前：内容按当时磁盘上的**原始字节**恢复
 （编码、BOM、行尾风格一并回来），随后重建该路径的 served 锚点 ——
 内容回到旧样子，旧锚点重新有效。
 
@@ -259,8 +261,34 @@ undo -f FILE
 （单条上限 4 MiB，超了明确报 E_UNDO_TOO_BIG）。撤销一条后记录即消费掉，
 再 undo 就是继续往前退一层。
 `
+	case ToolAppend, ToolPrepend:
+		return insertHelp(tool)
 	}
 	return ""
+}
+
+// insertHelp 是 append / prepend 的帮助。两者只差插入方向，正文共用。
+func insertHelp(tool Tool) string {
+	name, where := "append", "之后"
+	if tool == ToolPrepend {
+		name, where = "prepend", "之前"
+	}
+	return name + ` ANCHOR CONTENT
+` + name + ` -f FILE ANCHOR CONTENT
+` + name + ` -c ANCHOR CONTENT
+
+把 CONTENT 插到 ANCHOR 所指那一行**` + where + `**（append 在后，prepend 在前）。
+
+ANCHOR 是单行锚点（3 个 base62 字符），必须来自本终端的 read / grep。
+位置只由锚点决定，所以 FILE 可以省：工具从 served 基线反查锚点属于哪个文件，
+多个文件都 serve 过同一锚点时报 E_AMBIGUOUS_ANCHOR，用 -f FILE 指明。
+
+CONTENT 里的分行必须是**真换行**（$'a\nb'、here-doc）；"" 表示插入一个空行。
+被锚定的那一行原样保留、锚点不变：实现上就是"把它替换成它自己 + 新行"，
+所以校验链、undo、served 重建与 edit 完全一致（锚点过期同样报 E_STALE_*）。
+CONTENT 恰好是 -v / -q / -h / -f / -c / --json 这类 rweg 认得的 flag 时，
+改用 -c ANCHOR CONTENT 形态，免得被通用 flag 解析摘走。
+`
 }
 
 func runCore(args []string) error {
@@ -282,7 +310,7 @@ func runCore(args []string) error {
 		return cmdNS(args[1:])
 	case "gc":
 		return cmdGC(args[1:])
-	case "read", "write", "edit", "grep", "undo":
+	case "read", "write", "edit", "grep", "undo", "append", "prepend":
 		// 工具名当子命令：装出来的 bin 里只有 core-rweg 一个二进制，
 		// env.sh 的 h* 函数与 env.aggressive.sh 的同名接管都走这条路。
 		return runTool(Tool(args[0]), args[1:])
@@ -316,7 +344,8 @@ func coreHelp() string {
   RWEG_NS             当前终端的 namespace，由 env.sh 生成
   RWEG_VERBOSE        置非 0 值后，source env.sh 会往 stderr 打就绪信息
 
-工具入口：core-rweg read|write|edit|grep|undo ...（各有 -h），与 argv[0]
+工具入口：core-rweg read|write|edit|grep|undo|append|prepend ...（各有 -h），
+	与 argv[0]
 分发（read.exe / grep.exe 之类的硬链接）等价 —— 现在只装 core-rweg 一个二进制。
 `
 }

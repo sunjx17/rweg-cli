@@ -29,7 +29,7 @@ type UndoEntry struct {
 	Existed bool
 	// TooBig 为真表示前像超过 UndoMaxBytes，没留副本。
 	TooBig bool
-	// Kind 是产生这条记录的动作用的名字：write / edit。
+	// Kind 是产生这条记录的动作用的名字：write / edit / append / prepend。
 	Kind string
 	// Content 是改动前的原始字节（编码、BOM、行尾原样）。
 	Content []byte

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"rweg/internal/config"
@@ -165,35 +164,45 @@ func splitReplacement(content string) []string {
 	return strings.Split(content, "\n")
 }
 
-// runEdit 是 edit 的实现。
+// runEdit 是 edit 的实现：解析参数，把活交给 applyEdit。
+func runEdit(c *Ctx, args []string) error {
+	a, err := parseEditArgs(args)
+	if err != nil {
+		return err
+	}
+	return applyEdit(c, a.file, a.ops, "edited")
+}
+
+// applyEdit 是 edit / append / prepend 共用的写入链路。
+//
+// 调用方只负责把动作表达成若干 edit.Op：append / prepend 传进来的那条 op
+// 把被锚定的行替换成「它自己 + 新行」（prepend 反过来），所以校验链、原子写、
+// undo、served 重建沿用同一条路径，不为插入另开分支。
+// verb 是成功输出的动词（edited / appended / prepended）。
 //
 // 流程（plan §7.1）：
 //
 //	加载当前文件 → 算当前锚点 → 取 served → 校验链 → 应用 → 原子落盘 → 写库 → 输出
 //
 // 原子性体现在两个层次：
-//  1. 所有 -c 先在内存里解析 + 校验，任何一个失败 → 不写文件、不写库
+//  1. 所有 op 先在内存里解析 + 校验，任何一个失败 → 不写文件、不写库
 //  2. 全部通过 → 一次 MapStable 重算 → 单次原子写 → 单事务写库
-func runEdit(c *Ctx, args []string) error {
-	a, err := parseEditArgs(args)
-	if err != nil {
-		return err
-	}
-	if n := c.Res.Cfg.Edit.MaxChanges; n > 0 && len(a.ops) > n {
-		return UsageErr("E_TOO_MANY  %d changes exceed [edit].max_changes = %d", len(a.ops), n).
+func applyEdit(c *Ctx, file string, ops []edit.Op, verb string) error {
+	if n := c.Res.Cfg.Edit.MaxChanges; n > 0 && len(ops) > n {
+		return UsageErr("E_TOO_MANY  %d changes exceed [edit].max_changes = %d", len(ops), n).
 			WithHint("split into several edit calls")
 	}
 
-	doc, err := docfile.Load(a.file, docfile.Options{
+	doc, err := docfile.Load(file, docfile.Options{
 		MaxLines:     c.Res.Cfg.Read.MaxLines,
 		MaxLineBytes: c.Res.Cfg.Read.MaxLineBytes,
 	})
 	if err != nil {
-		return translateDocError(err, a.file)
+		return translateDocError(err, file)
 	}
 	if doc.LineCount() == 0 {
-		return BizErr("E_EMPTY  %s is empty", displayPath(a.file)).
-			WithHint(`use write -f ` + a.file + ` -c "..." to fill it`)
+		return BizErr("E_EMPTY  %s is empty", displayPath(file)).
+			WithHint(`use write -f ` + file + ` -c "..." to fill it`)
 	}
 
 	anchors, err := anchorsFor(c, doc)
@@ -207,7 +216,7 @@ func runEdit(c *Ctx, args []string) error {
 		return err
 	}
 
-	validated, fail := edit.Check(sv, cur, a.ops, c.Res.Cfg.Edit.ServedEchoCap)
+	validated, fail := edit.Check(sv, cur, ops, c.Res.Cfg.Edit.ServedEchoCap)
 	if fail != nil {
 		return editFailure(fail, doc, c)
 	}
@@ -233,12 +242,12 @@ func runEdit(c *Ctx, args []string) error {
 
 	out, err := doc.RenderEncoded(res.Lines, remapEnds(doc, res.Mapping))
 	if err != nil {
-		return translateDocError(err, a.file)
+		return translateDocError(err, file)
 	}
 	if err := writeFileAtomic(doc.Path, out); err != nil {
-		return &Error{Code: ExitBiz, Message: "E_WRITE  " + displayPath(a.file) + ": " + err.Error()}
+		return &Error{Code: ExitBiz, Message: "E_WRITE  " + displayPath(file) + ": " + err.Error()}
 	}
-	recordUndo(c, doc.Path, true, "edit", pre, preTooBig)
+	recordUndo(c, doc.Path, true, string(c.Tool), pre, preTooBig)
 
 	// 写库：served 整份替换（行号会位移）+ retired 追加。
 	canonVer := c.Res.Cfg.Hash.CanonVersion
@@ -257,7 +266,7 @@ func runEdit(c *Ctx, args []string) error {
 	if c.JSON {
 		return emitEditJSON(os.Stdout, doc, res)
 	}
-	emitEditText(os.Stdout, doc, res, c.Quiet)
+	emitEditText(os.Stdout, doc, res, c.Quiet, verb)
 	return nil
 }
 
@@ -385,13 +394,10 @@ func writeAnchorLines(w io.Writer, lines []edit.Line, mark string) {
 //	- nVR│const x = 1;
 //	+ EPx│const x = 42;
 //	  Um7│  console.log("world");
-func emitEditText(w io.Writer, doc *docfile.Doc, res *edit.Result, quiet bool) {
+func emitEditText(w io.Writer, doc *docfile.Doc, res *edit.Result, quiet bool, verb string) {
 	var b strings.Builder
 	if !quiet {
-		name := "edited"
-		if filepath.Base(doc.Path) == "" {
-			name = "edited"
-		}
+		name := verb
 		// 只报真正变了的行：两个计数都是 0 时不出 "+0 -0"。
 		delta := ""
 		if res.Added > 0 {

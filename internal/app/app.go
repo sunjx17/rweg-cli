@@ -63,18 +63,21 @@ func (e *Error) report(w io.Writer) {
 type Tool string
 
 const (
-	ToolCore Tool = "core-rweg"
-	ToolRead Tool = "read"
-	ToolWrte Tool = "write"
-	ToolEdit Tool = "edit"
-	ToolGrep Tool = "grep"
-	ToolUndo Tool = "undo"
+	ToolCore    Tool = "core-rweg"
+	ToolRead    Tool = "read"
+	ToolWrte    Tool = "write"
+	ToolEdit    Tool = "edit"
+	ToolGrep    Tool = "grep"
+	ToolUndo    Tool = "undo"
+	ToolAppend  Tool = "append"
+	ToolPrepend Tool = "prepend"
 )
 
 // DetectTool 从 os.Args[0] 判断当前是哪个工具。
 //
 // 分发规则：取 basename 去 .exe，若形如 core-rweg / core_rweg / core.rweg
-// 则视为 core；read/write/edit/grep 直接匹配；其余一律当 core
+// 则视为 core；工具名（read/write/edit/grep/undo/append/prepend）直接匹配；
+// 其余一律当 core
 // （这样 `go run ./cmd/core-rweg` 也能工作）。
 func DetectTool(argv0 string) Tool {
 	base := filepath.Base(argv0)
@@ -93,6 +96,10 @@ func DetectTool(argv0 string) Tool {
 		return ToolGrep
 	case "undo", "undo-last-edit":
 		return ToolUndo
+	case "append":
+		return ToolAppend
+	case "prepend":
+		return ToolPrepend
 	}
 	return ToolCore
 }

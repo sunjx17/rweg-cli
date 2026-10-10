@@ -16,7 +16,7 @@ import (
 // 只用于提示文案。
 const undoStackDepth = 16
 
-// runUndo 把某个路径退回上一次 write / edit 之前的状态。
+// runUndo 把某个路径退回上一次改动（write / edit / append / prepend）之前的状态。
 //
 // 只认本 namespace 里 rweg 自己写过的改动：前像存在库里（undo 表），
 // 恢复的是**原始字节**，所以编码、BOM、行尾风格一并回来。

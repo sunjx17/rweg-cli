@@ -148,11 +148,12 @@ func parseFlags(tool Tool, args []string) flagSet {
 
 // flagValueArity 返回某 flag 后面跟几个值。
 //
-// edit 的 `-c` 是两个（锚点对 + 替换文本）；write 的 `-c` 是一个。
+// edit 的 `-c` 是两个（锚点对 + 替换文本），append / prepend 的 `-c` 也是两个
+// （单锚点 + 内容）；write 的 `-c` 是一个。
 func flagValueArity(tool Tool, flag string) int {
 	switch flag {
 	case "-c", "--change", "--content":
-		if tool == ToolEdit {
+		if tool == ToolEdit || tool == ToolAppend || tool == ToolPrepend {
 			return 2
 		}
 		return 1

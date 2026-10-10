@@ -9,8 +9,8 @@
 #   $RWEG_HOME/
 #   ├── bin/         core-rweg —— 唯一二进制（工具入口是它的子命令）
 #   ├── scripts/
-#   │   ├── env.sh              非侵入入口：hread / hwrite / hedit / hgrep / hundo
-#   │   ├── env.aggressive.sh   侵入入口：同名接管 + cd 提示
+#   │   ├── env.sh              非侵入入口：h* 别名 + undo / append / prepend（原名）
+#   │   ├── env.aggressive.sh   侵入入口：强行接管 read / write / edit / grep + cd 提示
 #   │   └── env.restore.sh      反注册：source 它恢复内置
 #   ├── db/          安装级默认数据库目录
 #   └── rweg.toml    安装级默认配置（cwd 没有 rweg.toml 时生效）
@@ -97,9 +97,9 @@ echo "install complete -> $_home"
 echo
 echo "用法（两种 source 方式，任选其一）："
 echo "  export RWEG_HOME=\"$_home\"          # 可选，env.sh 会自己算"
-echo "  source \"$_home/scripts/env.sh\"            # 非侵入：hread / hwrite / hedit / hgrep / hundo"
-echo "  source \"$_home/scripts/env.aggressive.sh\"  # 另把 read / write / edit / grep / undo 与 cd 提示接管"
-echo "  source \"$_home/scripts/env.restore.sh\"     # 反注册：拆掉接管层，恢复内置（--all 连 h* 层一起拆）"
+echo "  source \"$_home/scripts/env.sh\"            # 非侵入：h* 别名 + undo / append / prepend"
+echo "  source \"$_home/scripts/env.aggressive.sh\"  # 强行接管 read / write / edit / grep（cd 另加提示）"
+echo "  source \"$_home/scripts/env.restore.sh\"     # 反注册：拆掉接管层（--all 连 env.sh 层一起拆）"
 echo "  core-rweg doctor"
 echo
 echo "项目级配置：在项目根放一个 rweg.toml（可只写 [db] dir），"

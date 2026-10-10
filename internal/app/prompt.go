@@ -27,12 +27,15 @@ const agentPrompt = `# rweg 工具约定（贴进 Agent 的 system prompt）
 
 本机已装 rweg。行锚（hashline）工具是 core-rweg 的子命令，由 env.sh 注入成 bash 函数：
 
-    source ~/.rweg/scripts/env.sh             → hread / hwrite / hedit / hgrep / hundo
-    source ~/.rweg/scripts/env.aggressive.sh  → 另把 read / write / edit / grep / undo
-                                                与 cd 提示接管（同名覆盖）
+    source ~/.rweg/scripts/env.sh             → 七个工具的 h* 函数：hread / hwrite / hedit /
+                                                hgrep / hundo / happend / hprepend
+                                                （undo / append / prepend 另有不带 h 的原名）
+    source ~/.rweg/scripts/env.aggressive.sh  → 另把 read / write / edit / grep 强行接管
+                                                （同名覆盖；cd 另加提示）
 
-下文用短名 read / write / edit / grep / undo；非侵入模式下就是 hread / hwrite /
-hedit / hgrep / hundo，语义完全相同，用法与系统同名命令不同。
+下文用短名 read / write / edit / grep / undo / append / prepend；非侵入模式下只有前四个
+要加 h（hread / hwrite / hedit / hgrep），undo / append / prepend 两种模式同名。
+用法与系统同名命令不同。
 以下约定优先于你惯用的 cat / sed / 整文件重写。
 
 ## 何时用哪个
@@ -40,7 +43,8 @@ hedit / hgrep / hundo，语义完全相同，用法与系统同名命令不同�
 - 看文件：read（不要 cat / head / sed）；只读需要的行，省 token。
 - 改文件：edit + 锚点（不要整体重写，也不要复述未改动的行）。
 - 找位置：grep（参数同 ripgrep），命中行自带锚点，可直接 edit。
-- 改错了：undo 退回上一次 write / edit 之前的内容。
+- 插一行：append / prepend + 单个锚点（位置只由锚点定，文件从基线反查）。
+- 改错了：undo 退回上一次 write / edit / append / prepend 之前的内容。
 
 ## 命令
 
@@ -56,13 +60,18 @@ hedit / hgrep / hundo，语义完全相同，用法与系统同名命令不同�
           不给 content 则从 stdin 读全文；整文件替换；目录必须已存在。
           内容不以换行结尾时会自动补一个；要精确控制就走 stdin。
     grep  [rg 参数]... [--] 路径
-    undo  [FILE]          回退该文件（不给 FILE 则最近一次）上一次 write / edit 之前
+    undo  [FILE]          回退该文件（不给 FILE 则最近一次）上一次改动之前
+    append  ANCHOR "line" 插在 ANCHOR 那行之后；prepend 则插在它之前
+           位置只由锚点定，所以文件可以省（从基线反查；多个文件都读过同一锚点时
+           报 E_AMBIGUOUS_ANCHOR，用 -f FILE 指明）。"" 插一个空行。
+           CONTENT 恰好是 -v / -q / -h / -f / -c / --json 时用 -c ANCHOR CONTENT 形态。
 
 FILE 放在最前面就能省掉 -f。要把 flag 写在文件名前面（read --encoding gbk FILE）
 时改用 -f FILE 形式，两者等价；旧写法 read -f FILE / write -f FILE -c CONTENT /
 edit -f FILE -c FROM:TO CONTENT 照旧可用。
 
-帮助：read -h / write -h / edit -h / grep -h / undo -h / core-rweg -h。
+帮助：read -h / write -h / edit -h / grep -h / undo -h / append -h / prepend -h /
+core-rweg -h。
 
 ## 输出形态
 
@@ -93,7 +102,8 @@ edit 报错时回传的当前区间仍用「锚点│内容」形态。
 
 - 锚点是 3 字符（如 CTt），只在本终端的 read / grep 之后有效，且只对同一文件。
   锚点由内容决定：不同文件里内容相同的行会得到同一个锚点，别跨文件复用。
-- 读过的行进入基线；edit 只认基线里的锚点，所以 grep 或 read 之后才能改。
+- 读过的行进入基线；edit / append / prepend 只认基线里的锚点，所以 grep 或 read
+  之后才能改。append / prepend 的位置由单个锚点给出，文件由基线反查。
 - edit 报 E_STALE_RANGE / E_STALE_ANCHOR / E_UNKNOWN_ANCHOR /
   E_AMBIGUOUS_ANCHOR 时，该锚点作废：按 hint 重新 read 目标区间再 edit。
   工具回传的「当前区间」内容不入基线，不能拿它直接重试。
@@ -102,7 +112,7 @@ edit 报错时回传的当前区间仍用「锚点│内容」形态。
 
 ## undo（撤销）
 
-    undo FILE      退到该文件上一次 write / edit 之前（原始字节，编码/行尾一并回来）
+    undo FILE      退到该文件上一次改动之前（原始字节，编码/行尾一并回来）
     undo           退到最近一次改动（不限文件）
 
 每个 namespace 记最近 16 次改动，单条上限 4 MiB（超了报 E_UNDO_TOO_BIG）。

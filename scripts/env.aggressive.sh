@@ -3,7 +3,7 @@
 #
 # 先 source 同目录的 env.sh（路径 / PATH / ns / 配置钉住 / h* 工具），再加一层：
 #
-#   read / write / edit / grep / undo / undo_last_edit
+#   read / write / edit / grep 
 #       同名函数覆盖 —— read 压过 bash 内置，grep 压过系统 grep。
 #       read 只在下列情形归 rweg：出现 rweg 独有 flag（-f / --file / --json /
 #       --no-serve / --encoding / --quiet / -h）；零参数；或简写
@@ -87,22 +87,28 @@ read() {
 	fi
 	return "$_rc"
 }
-
-
 write()     { hwrite "$@"; }
 edit()      { hedit  "$@"; }
 grep()      { hgrep  "$@"; }
-undo()      { hundo  "$@"; }
-undo_last_edit() { hundo_last_edit "$@"; }
-
 # --- cd：只提示，不改行为（且不 export -f）---
 cd(){
 	# cd 包装只给交互提示：**不 export -f**（原因见下面的 export 段），
-	# 且一律走 stderr —— stdout 会被 `$(cd ... && pwd)` 这类命令替换收走。
-	echo "WARN:cd command is not recommended in this shell." >&2
+	# 且一律走 stderr —— stdout 会被 $(cd ... && pwd) 这类命令替换收走。
+	echo "WARNING:cd command is not recommended in this shell." >&2 # 给不太聪明的agent的提示，避免它在shell里过度cd；aggressive默认开启。
+	last__cwd=$(pwd)
 	builtin cd "$@"
 	if [ $? -eq 0 ]; then
-		echo "cwd changed to '$(pwd)'" >&2
+	{
+		if [ "$last__cwd" == $(pwd) ]; then
+		{
+			# 给过度谨慎的agent的提示，避免它在shell里重复cd到同一路径（持久shell里没有必要每行都在开头加cd {cwd}）。默认开启，停用只需注释掉。
+			echo "cd command ERROR: do not call 'cd $(pwd)' command more than twice." >&2
+		}
+		else
+			# 给agent的提示，同样避免它在shell里重复cd到同一路径。默认开启，停用只需注释掉。
+			echo "cd: cwd changed to '$(pwd)'" >&2
+		fi
+	}
 	fi
 }
 
@@ -114,5 +120,5 @@ if [ -n "${BASH_VERSION:-}" ]; then
 fi
 
 if [ -n "${RWEG_VERBOSE:-}" ] && [ "${RWEG_VERBOSE}" != "0" ]; then
-	echo "  接管：read / write / edit / grep / undo（同名覆盖），cd 只加提示" >&2
+	echo "  接管：read / write / edit / grep （同名覆盖），cd 只加提示" >&2
 fi

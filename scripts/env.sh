@@ -2,9 +2,8 @@
 # rweg env.sh — 把 rweg 套件引入当前 shell 会话（**非侵入**入口）。
 #
 # 入口有两个，任选其一：
-#     source ~/.rweg/scripts/env.sh              # 本文件：只加 h* 名字
-#     source ~/.rweg/scripts/env.aggressive.sh   # 另把 read/write/edit/grep/
-#                                                # undo 与 cd 提示接管（同名覆盖）
+#     source ~/.rweg/scripts/env.sh              # 本文件：只加 h* 名字和不冲突的几种
+#     source ~/.rweg/scripts/env.aggressive.sh   # 强行接管 read/write/edit/grep
 #
 # 本文件做四件事：
 #   1. PATH 前置 $RWEG_HOME/bin —— 只为 `core-rweg` 能直接敲
@@ -13,7 +12,7 @@
 #   4. 后台跑一次 GC —— 清理过期 namespace / 快照
 #
 # 工具是 core-rweg 的子命令（bin 里只有这一个二进制），本层给 h 前缀别名：
-#     hread / hwrite / hedit / hgrep / hundo / hundo_last_edit
+#     hread / hwrite / hedit / hgrep / hundo / happend / hprepend / hundo_last_edit
 # read / write / edit / grep / undo 与 bash 原生 cd **一个都不动**。
 #
 # 幂等：同一终端重复 source 不产生第二个 ns、PATH 不堆积。
@@ -97,10 +96,9 @@ esac
 
 # --- 1b. h* 工具函数（不覆盖任何同名命令）---
 #
-# 工具入口统一走 core-rweg 的子命令形态：装出来的 bin 里只有 core-rweg 一个
-# 二进制，没有 read.exe / grep.exe 之类的 argv[0] 硬链接。
-# 这一层只加 h 前缀名；要 read / write / edit / grep / undo 与 cd 提示被接管，
+# 工具入口统一走 core-rweg 的子命令形态
 # source env.aggressive.sh（它在 env.sh 之上再加一层）。
+# append/prepend/undo bash无原生，可无侵入使用，但保风格一致还是留h*函数
 #
 # **`export -f` 不能省**：不 export 的话，子进程（`bash script.sh`、
 # dsh 派生的脚本、make 里的命令行）里就没有这些函数。
@@ -110,12 +108,22 @@ hwrite() { "$_rweg_core" write "$@"; }
 hedit()  { "$_rweg_core" edit  "$@"; }
 hgrep()  { "$_rweg_core" grep  "$@"; }
 hundo()  { "$_rweg_core" undo  "$@"; }
+# 只在某一行前后插内容：位置由单个锚点定，文件从基线反查（core-rweg append -h 有细节）。
+happend()  { "$_rweg_core" append  "$@"; }
+hprepend() { "$_rweg_core" prepend "$@"; }
 # dsh-hashline-edittool 里的工具名，给个同名入口，省得两套名字来回记。
 hundo_last_edit() { "$_rweg_core" undo "$@"; }
+
+# --- 1c. 不冲突的非h*函数 ---
+undo()  { "$_rweg_core" undo  "$@"; }
+append()  { "$_rweg_core" append  "$@"; }
+prepend() { "$_rweg_core" prepend "$@"; }
 core-rweg() { "$_rweg_core" "$@"; }
 
+# --- 1d. export -f
+
 if [ -n "${BASH_VERSION:-}" ]; then
-	export -f hread hwrite hedit hgrep hundo hundo_last_edit core-rweg 2>/dev/null || true
+	export -f hread hwrite hedit hgrep hundo happend hprepend hundo_last_edit undo append prepend core-rweg 2>/dev/null || true
 fi
 
 # --- 2. namespace：已存在则复用 ---
@@ -169,10 +177,34 @@ unset _rweg_src _rweg_dir _rweg_home_posix _rweg_home_native
 if [ -n "${RWEG_VERBOSE:-}" ] && [ "${RWEG_VERBOSE}" != "0" ]; then
 	{
 		echo "rweg ready (home=$RWEG_HOME, ns=${RWEG_NS:-<cwd-derived>}, walkup=${RWEG_WALKUP:-0})"
-		echo "  h* 工具就绪：hread / hwrite / hedit / hgrep / hundo / hundo_last_edit"
-		echo "  要同名接管（read/write/edit/grep/undo + cd 提示）：source env.aggressive.sh"
+		echo "  h* 工具hread / hwrite / hedit / hgrep +  append / prepend / undo / undo_last_edit 就绪" # 后面四个就不写h*了，但也可以用
+		echo "  要同名接管（read/write/edit/grep）：source env.aggressive.sh"
 		echo "  诊断：core-rweg cfg | core-rweg doctor；Agent 提示词：core-rweg prompt"
 		echo "  配置钉住：${RWEG_PIN_CONFIG:-<无，按 cwd 现找>}"
 echo "  向上找配置：RWEG_WALKUP=2 core-rweg cfg"
 	} >&2
 fi
+# --- 额外的自定义项目:
+# --- grep，如果想临时强行接管就取消注释（供调试）
+# grep()      { hgrep  "$@"; }
+# --- cd：只提示，不改行为（且不 export -f）---
+cd(){
+	# cd 包装只给交互提示：**不 export -f**（原因见下面的 export 段），
+	# 且一律走 stderr —— stdout 会被 $(cd ... && pwd) 这类命令替换收走。
+	# echo "WARNING:cd command is not recommended in this shell." >&2 # 给不太聪明的agent的提示，避免它在shell里过度cd；默认关闭，启用可取消注释。
+	last__cwd=$(pwd)
+	builtin cd "$@"
+	if [ $? -eq 0 ]; then
+	{
+		if [ "$last__cwd" == $(pwd) ]; then
+		{
+			# 给过度谨慎的agent的提示，避免它在shell里重复cd到同一路径（持久shell里没有必要每行都在开头加cd {cwd}，实际观察到agent很喜欢反复cd同一目录包括开发本项目的那位）。默认开启，停用只需注释掉。
+			echo "cd command ERROR: do not call 'cd $(pwd)' command more than twice." >&2
+		}
+		else
+			# 给agent的提示，同样避免它在shell里重复cd到同一路径。默认开启，停用只需注释掉。
+			echo "cd: cwd changed to '$(pwd)'" >&2
+		fi
+	}
+	fi
+}

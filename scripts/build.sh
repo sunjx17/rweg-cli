@@ -6,8 +6,8 @@
 #   ├── bin/
 #   │   └── core-rweg.exe        ← 唯一二进制；工具入口是它的子命令
 #   ├── scripts/
-#   │   ├── env.sh               ← 非侵入：只加 hread / hwrite / hedit / hgrep / hundo
-#   │   ├── env.aggressive.sh    ← 接管 read / write / edit / grep / undo 与 cd 提示
+#   │   ├── env.sh               ← 非侵入：h* 别名 + undo / append / prepend（原名）
+#   │   ├── env.aggressive.sh    ← 强行接管 read / write / edit / grep（cd 另加提示）
 #   │   └── env.restore.sh       ← 反注册：把接管层拆掉，恢复内置
 #   ├── db/
 #   └── rweg.toml
