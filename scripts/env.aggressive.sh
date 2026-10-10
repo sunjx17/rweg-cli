@@ -116,7 +116,7 @@ if [ -n "${BASH_VERSION:-}" ]; then
 	# ⚠️ 这份名单里**没有 cd**：cd 包装只做交互提示，一旦 export -f 就会被
 	# 每个子脚本继承，把 `root="$(cd ... && pwd)"` 的结果污染成警告文本
 	# （rweg 自己的 scripts/build.sh 就这么崩过）。子脚本一律用 bash 内置 cd。
-	export -f read write edit grep undo undo_last_edit 2>/dev/null || true
+	export -f read write edit grep undo 2>/dev/null || true
 fi
 
 if [ -n "${RWEG_VERBOSE:-}" ] && [ "${RWEG_VERBOSE}" != "0" ]; then
