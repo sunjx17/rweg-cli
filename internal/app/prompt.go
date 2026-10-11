@@ -43,7 +43,7 @@ const agentPrompt = `# rweg 工具约定（贴进 Agent 的 system prompt）
 - 看文件：read（不要 cat / head / sed）；只读需要的行，省 token。
 - 改文件：edit + 锚点（不要整体重写，也不要复述未改动的行）。
 - 找位置：grep（参数同 ripgrep），命中行自带锚点，可直接 edit。
-- 插一行：append / prepend + 单个锚点（位置只由锚点定，文件从基线反查）。
+- 插一行：append / prepend + 文件 + 单个锚点（位置只由锚点定，文件必填）。
 - 改错了：undo 退回上一次 write / edit / append / prepend 之前的内容。
 
 ## 命令
@@ -61,9 +61,9 @@ const agentPrompt = `# rweg 工具约定（贴进 Agent 的 system prompt）
           内容不以换行结尾时会自动补一个；要精确控制就走 stdin。
     grep  [rg 参数]... [--] 路径
     undo  [FILE]          回退该文件（不给 FILE 则最近一次）上一次改动之前
-    append  ANCHOR "line" 插在 ANCHOR 那行之后；prepend 则插在它之前
-           位置只由锚点定，所以文件可以省（从基线反查；多个文件都读过同一锚点时
-           报 E_AMBIGUOUS_ANCHOR，用 -f FILE 指明）。"" 插一个空行。
+    append  FILE ANCHOR "line"  插在 ANCHOR 那行之后；prepend 则插在它之前
+           FILE 必填（与 read / write / edit 一致，可省 -f）；"" 插一个空行。
+           CONTENT 的换行与 edit 同源（真换行：$'a\nb' / here-doc / 命令替换）。
            CONTENT 恰好是 -v / -q / -h / -f / -c / --json 时用 -c ANCHOR CONTENT 形态。
 
 FILE 放在最前面就能省掉 -f。要把 flag 写在文件名前面（read --encoding gbk FILE）
@@ -85,28 +85,35 @@ core-rweg -h。
 - 单行超过 max_line_bytes = 6000 字节时锚点位置显示 ~~~，该行不能用于 edit
   （锚点要完整行；用 read RANGE 把它切成更小的行再改）。
 
-edit 回传的是 git 风格的差异，前缀分别是 "  "（上下文）/"- "/"+ "，
-相隔较远的块之间用单独一行 "..." 表示省略（不重复打印没变的行）：
+edit 回传的是「一行确认 + git 风格差异 + 一行收尾（路径与行数变化）」，
+差异前缀分别是 "  "（上下文）/"- "/"+ "，相隔较远的块之间用单独一行 "..."
+表示省略（不重复打印没变的行）：
 
-    edited src/app.ts (6 → 7 lines, +2 -1)
+    edited ok
       AU6│}
     - nVR│const x = 1;
     + pQ7│const x = 2;
     + m1Z│const z = 3;
       yAZ│let y = 2;
+    src/app.ts (6 → 7 lines, +2 -1)
 
-头部只计**真正改变的行数**：只增不减时不出现 -N，一处没改就不出现 +0 -0。
-edit 报错时回传的当前区间仍用「锚点│内容」形态。
+收尾行的计数只算**真正改变的行数**：只增不减时不出现 -N，一处没改就不出现 +0 -0；
+-q / --quiet 只留差异正文（确认行与收尾行都不打）。
+edit 报错时回传的当前区间仍用「锚点│内容」形态，且这些行随即进基线，可直接重试。
 
 ## 锚点规则（要紧）
 
 - 锚点是 3 字符（如 CTt），只在本终端的 read / grep 之后有效，且只对同一文件。
   锚点由内容决定：不同文件里内容相同的行会得到同一个锚点，别跨文件复用。
 - 读过的行进入基线；edit / append / prepend 只认基线里的锚点，所以 grep 或 read
-  之后才能改。append / prepend 的位置由单个锚点给出，文件由基线反查。
-- edit 报 E_STALE_RANGE / E_STALE_ANCHOR / E_UNKNOWN_ANCHOR /
-  E_AMBIGUOUS_ANCHOR 时，该锚点作废：按 hint 重新 read 目标区间再 edit。
-  工具回传的「当前区间」内容不入基线，不能拿它直接重试。
+  之后才能改。**见到的行一律进基线**：read / grep 的输出、write 回传的全文、
+  edit 回传的 diff（含上下文行）、失败回显的当前区间，随后都能直接拿来改。
+  append / prepend 的位置由单个锚点给出，文件必须点名（不做跨文件反查）。
+- edit 报 E_STALE_RANGE / E_STALE_ANCHOR / E_AMBIGUOUS_ANCHOR 时按 hint 处理：
+  回显出来的行已经进基线，可以直接用它们重试；E_UNKNOWN_ANCHOR（本终端没读过）
+  才需要先 read。
+- 替换文本里误带行首锚点（把 read 输出整行贴回来，如 "CTt│foo"）：前缀命中本文件
+  当前锚点 → E_ANCHOR_IN_CONTENT 硬拒、不写盘；其余只给 W_ 软警告，内容照写。
 - 一次 edit 的多个改动原子生效：任一失败则文件与基线都不动。
 - 未读过的行不会被顺带改动；写回保持原编码 / 行尾 / BOM，不静默转码。
 

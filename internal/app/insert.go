@@ -17,18 +17,30 @@ type insertArgs struct {
 
 // parseInsertArgs 解析 append / prepend 的参数（方向由工具名决定）。
 //
-//	append ANCHOR CONTENT
+//	append FILE ANCHOR CONTENT
 //	append -f FILE ANCHOR CONTENT
-//	append -c ANCHOR CONTENT
+//	append FILE -c ANCHOR CONTENT
 //
-// 位置形态是主用法：单锚点在最前，内容紧跟其后。`-c` 形态给内容恰好是 rweg
-// 认得的 flag（-v / -q / -h / -f / -c / --json）时用 —— 那种内容会被通用 flag
-// 解析摘走，只有 `-c ANCHOR CONTENT` 能原样递进来（与 edit 的 `-c` 同理）。
+// FILE 必填：放在最前面时可以省掉 -f（与 read / write / edit 一致）。ANCHOR 是单个
+// 3 字符裸锚，CONTENT 紧跟其后；分行用**真换行**（$'a\nb'、here-doc、命令替换），
+// 与 edit 的替换文本同源。`-c` 形态给内容恰好是 rweg 认得的 flag
+// （-v / -q / -h / -f / -c / --json）时用 —— 那种内容会被通用 flag 解析摘走，
+// 只有 `-c ANCHOR CONTENT` 能原样递进来（与 edit 的 `-c` 同理）。
 func parseInsertArgs(tool Tool, args []string) (*insertArgs, error) {
 	name := string(tool)
-	usage := name + ` ANCHOR CONTENT   /   ` + name + ` -f FILE -c ANCHOR CONTENT`
+	usage := name + ` FILE ANCHOR CONTENT   /   ` + name + ` -f FILE -c ANCHOR CONTENT`
 
 	a := &insertArgs{}
+	if f, rest, ok := fileShorthand(args); ok {
+		a.file, args = config.ResolvePath(f), rest
+		// 不给文件时第一个位置参数会被当成文件名 —— 与其报「内容不是锚点」或
+		// 「文件不存在」，不如直接指出缺 FILE。真要操作一个 3 字符同名文件，
+		// 用 -f 形式就不走简写判定。
+		if validAnchorShape(a.file) {
+			return nil, UsageErr("%s: FILE is required", name).WithHint(usage).
+				WithDetails("hint: " + a.file + " looks like an anchor, not a path — " + name + " FILE ANCHOR CONTENT")
+		}
+	}
 	hasContent := false
 	useChange := false
 	for _, s := range args {
@@ -77,6 +89,9 @@ func parseInsertArgs(tool Tool, args []string) (*insertArgs, error) {
 		}
 	}
 
+	if a.file == "" {
+		return nil, UsageErr("%s: FILE is required", name).WithHint(usage)
+	}
 	if a.anchor == "" {
 		return nil, UsageErr("%s: ANCHOR is required", name).WithHint(usage)
 	}
@@ -100,8 +115,8 @@ func splitInsertContent(content string) []string {
 
 // runInsert 是 append / prepend 的实现（方向由 c.Tool 决定）。
 //
-// 位置只由**单个锚点**给出，文件可以省：锚点只在 served 基线里有效，而基线是
-// 逐路径记的，所以反查一次就知道它属于哪个文件（见 resolveInsertPath）。
+// FILE 必填（位置参数或 -f FILE）：锚点只在 served 基线里有效，而基线是逐路径记的，
+// 不给文件就只能跨路径反查，内容相同的行在不同文件里锚点相同、无从判断改哪个。
 //
 // 插入在内部表达成「把被锚定的那一行替换成 它自己 + 新行」（prepend 反过来）：
 // 于是校验链、原子写、undo、served 重建全部沿用 applyEdit，不为插入另开分支。
@@ -111,10 +126,7 @@ func runInsert(c *Ctx, args []string) error {
 	if err != nil {
 		return err
 	}
-	file, err := resolveInsertPath(c, a.file, a.anchor)
-	if err != nil {
-		return err
-	}
+	file := a.file
 
 	doc, err := docfile.Load(file, docfile.Options{
 		MaxLines:     c.Res.Cfg.Read.MaxLines,
@@ -150,40 +162,4 @@ func runInsert(c *Ctx, args []string) error {
 		verb = "prepended"
 	}
 	return applyEdit(c, file, []edit.Op{{From: a.anchor, To: a.anchor, Replacement: repl}}, verb)
-}
-
-// resolveInsertPath 决定这次插入作用在哪个文件上。
-//
-// -f 给了就用它（锚点是否属于它是校验链的事）；没给就从 served 基线反查锚点。
-// 反查只在**唯一命中**时认账：锚点由内容决定，不同文件里内容相同的行会得到同一个
-// 锚点，因此多个文件都 serve 过它时报 E_AMBIGUOUS_ANCHOR，让调用方用 -f 说清楚 ——
-// 绝不"选一个"，那正是静默写错行的来源。
-func resolveInsertPath(c *Ctx, file, anchor string) (string, error) {
-	if file != "" {
-		return file, nil
-	}
-	paths, err := c.DB.ServedPaths()
-	if err != nil {
-		return "", &Error{Code: ExitInternal, Message: "lookup anchor: " + err.Error()}
-	}
-	var hits []string
-	for _, p := range paths {
-		sv, err := c.DB.GetServed(p)
-		if err != nil {
-			return "", &Error{Code: ExitInternal, Message: "lookup anchor: " + err.Error()}
-		}
-		if sv != nil && sv.Has(anchor) {
-			hits = append(hits, p)
-		}
-	}
-	switch len(hits) {
-	case 0:
-		return "", BizErr("E_UNKNOWN_ANCHOR  %s is not in this namespace's baseline", anchor).
-			WithHint("read -f FILE first: an anchor is usable only right after read / grep")
-	case 1:
-		return hits[0], nil
-	}
-	return "", BizErr("E_AMBIGUOUS_ANCHOR  %s is served for %d files", anchor, len(hits)).
-		WithHint("pass -f FILE to pick one").
-		WithDetails("candidates:\n" + strings.Join(hits, "\n"))
 }

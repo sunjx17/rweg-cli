@@ -378,7 +378,7 @@ func (d *DB) ForgetPath(path string) error {
 	return tx.Commit()
 }
 
-// ServedPaths 列出所有有 served 记录的路径（doctor / 调试用）。
+// ServedPaths 列出所有有 served 记录的路径（诊断与 store 单测用）。
 func (d *DB) ServedPaths() ([]string, error) {
 	rows, err := d.sql.Query(`SELECT path FROM served ORDER BY path`)
 	if err != nil {

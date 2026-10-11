@@ -2,10 +2,9 @@
 //
 // 设计原则：**fail-closed**。
 // 宁可多一次 read，也绝不基于未经 read 的信息写入。
-// 因此拒绝时回传的当前锚点行**不写 served**（§7.2 第 4 步）——
-// 回传的锚点对应的是「磁盘现状」，而模型的意图基于「它读到时的状态」，
-// 两者可能不同（外部 formatter / git checkout 改过）。直接 serve 等于
-// 放弃这个比对，会重新引入静默写错行 —— 正是本方案要消灭的失败模式。
+// 而「serve」只认一条判据：**模型见过这行**。read / grep / write 打出来的行、
+// 成功 diff 打出来的每一行（上下文也算）、失败时回显的当前区间行，都会进 served
+// —— 见过即可用；真正被 fail-closed 拦下的是「没见过就拿来改」。
 //
 // 本包刻意只依赖 hashline 与 ranges，不依赖 store：
 // 校验链是整个方案里最需要被单测钉死的部分，不能靠数据库才能测。
@@ -104,7 +103,7 @@ type Failure struct {
 	// Region 是回传区域（1-based 闭区间）；RegionValid=false 表示无法定位。
 	Region      ranges.Range
 	RegionValid bool
-	// Lines 是回传的当前文件行 —— **绝不写入 served**。
+	// Lines 是回传的当前文件行 —— 调用方会把它们 serve（模型见过即可用）。
 	Lines []Line
 }
 
@@ -237,11 +236,12 @@ func Check(sv ServedView, cur *Current, ops []Op, maxEcho int) (*Validated, *Fai
 // Result 是一次成功应用的结果。
 //
 // Served 是**新的 served 数组**（长度 = len(Lines)）：
-//   - 未编辑的旧行沿用旧的 served 值（可能仍是空串 = 未 serve）
-//   - 编辑产生的新行标记为 served（模型会在输出里看到它们）
+//   - 编辑区间里的新行标记为 served；
+//   - diff 会打印出来的每一行（上下文 + 新增）也按新行号标记为 served；
+//   - 其余未编辑的旧行沿用旧的 served 值（可能仍是空串 = 未 serve）。
 //
 // 这样既不让"没读过的行"凭空变 served（fail-closed），
-// 又让"读完再插一行"这种常见链路不必重读全文。
+// 又让"读完改一行、顺手再改相邻行"这种常见链路不必重读。
 type Result struct {
 	Lines   []string
 	Hashes  []string
@@ -365,6 +365,18 @@ func Apply(cur *Current, v *Validated, sv ServedView, reserved map[string]bool,
 
 	// 7. diff：逐行比对，只有真正变了的行才打 - / +
 	diff, added, removed := buildDiff(cur.Lines, cur.Hashes, newLines, newHashes, spans, context)
+
+	//  8. diff 打印出来的每一行都是模型见过的行 → 一律进 served。
+	//     Del 行是已删除的旧行（锚点已 release，行本身也不在了），Elide 只是省略号，
+	//     两者都不是"模型能接着用的行"，不打标记。
+	for _, d := range diff {
+		if d.Kind == DiffDel || d.Kind == DiffElide || d.Line.Hash == "" {
+			continue
+		}
+		if i := d.Line.Line - 1; i >= 0 && i < len(newServed) {
+			newServed[i] = d.Line.Hash
+		}
+	}
 	res := &Result{
 		Lines:   newLines,
 		Hashes:  newHashes,

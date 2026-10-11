@@ -259,9 +259,9 @@ func TestApplyReplacesWithStableAnchors(t *testing.T) {
 	}
 }
 
-// TestApplyKeepsUnservedHoles 是 fail-closed 的核心断言：
-// 只读过 1:3 与 5:6 的文件，编辑第 4 行之后，第 7/8 行（原第 5/6 行）
-// 仍是 served，但**原本没读过的行不能因为位移而变成 served**。
+// TestApplyKeepsUnservedHoles 锁死 serve 判据与 fail-closed 的分界：
+// 只读过 1:3 与 5:6 的文件，编辑第 1-3 行之后，diff 打印出来的上下文行
+// （原第 4 行，此前未 serve）按新行号进基线；**没打印出来的行**仍是空串。
 func TestApplyKeepsUnservedHoles(t *testing.T) {
 	lines, h := canonical()
 	cur := NewCurrent(lines, h)
@@ -279,9 +279,14 @@ func TestApplyKeepsUnservedHoles(t *testing.T) {
 	if len(res.Served) != len(res.Lines) {
 		t.Fatalf("served length %d != lines %d", len(res.Served), len(res.Lines))
 	}
-	// 原第 4 行（未 serve）现在落在第 2 个位置，必须还是空串。
-	if res.Served[1] != "" {
-		t.Fatalf("unserved hole leaked into served: %q", res.Served[1])
+	// diff 打印出来的上下文行（原第 4 行）现在落在第 2 个位置 → 进基线
+	if res.Served[1] != res.Hashes[1] {
+		t.Fatalf("printed context row should be served: %q vs %q", res.Served[1], res.Hashes[1])
+	}
+	// context=0 时 diff 只打印真正改动过的行：没打印的行不进基线（fail-closed）
+	res0 := Apply(cur, v, sv, nil, hashline.DefaultProbeStride, 0)
+	if res0.Served[1] != "" {
+		t.Fatalf("unprinted row must stay unserved: %q", res0.Served[1])
 	}
 	// 编辑产生的行必须 served
 	if res.Served[0] != res.Hashes[0] {

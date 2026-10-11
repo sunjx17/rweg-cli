@@ -73,8 +73,8 @@ doctor 检 PATH 首位（两种形态皆认）；shell 层由 `scripts/shell-tes
 
 ```bash
 read src/app.ts 1:6                          # 简写：文件放最前，省掉 -f
-append  nVR "  // 插在这行之后"               # 单锚点定位置，文件由基线反查
-prepend nVR "  // 插在这行之前"
+append  src/app.ts nVR "  // 插在这行之后"     # 文件 + 单锚点定位置
+prepend src/app.ts nVR "  // 插在这行之前"
 edit src/app.ts nVR:nVR "const x = 42;"
 write src/new.ts "export const a = 1;"
 grep -n hello src/
@@ -171,30 +171,31 @@ edit -f FILE -c FROM:TO "lines" [-c FROM:TO "lines" ...]
 
 ```bash
 $ edit -f src/app.ts -c nVR:nVR "$(printf 'const x = 42;\nconst z = 3;')"
-edited src/app.ts (6 → 7 lines, +2 -1)
+edited ok
   AU6│}
 - nVR│const x = 1;
 + EPx│const x = 42;
 + jDo│const z = 3;
   yAZ│let y = 2;
+src/app.ts (6 → 7 lines, +2 -1)
 ```
 
-未动之行，锚点皆留。回传的是 git 风格的差异：`  ` 上下文、`- ` 删、`+ ` 增，
-相距较远的块之间用单独一行 `...` 省略（没变的行不重复打印）。头部只计**真正改变的行数**：只增不减时不出现 `-N`，一处没改则不出现 `+0 -0`。
+未动之行，锚点皆留；diff 打出来的每一行（上下文与新增）都随即进基线。回传的是 git 风格的差异：`  ` 上下文、`- ` 删、`+ ` 增，
+相距较远的块之间用单独一行 `...` 省略（没变的行不重复打印）。收尾行的计数只算**真正改变的行数**：只增不减时不出现 `-N`，一处没改则不出现 `+0 -0`。`-q` / `--quiet` 只留 diff 正文，确认行与收尾行都不打。
 
 锚已过期，则硬拒，并回传该区域当前锚点：
 
 ```bash
 $ edit -f src/app.ts -c CTt:AU6 "function hi() {"
 E_STALE_RANGE  src/app.ts  lines 1-3 changed since read
-hint: read -f src/app.ts 1:3  then retry
+hint: retry with the anchors above (lines 1-3 are served now)
 Current range (1-3):
 CTt│function hello() {
 nEt│  console.log("world!!!");
 AU6│}
 ```
 
-回传之行不入基线。持之重试，复拒。
+回传之行随即入基线：回显的锚点可以直接拿来重试，不必先重新 read（重新 read 当然也可以）。
 
 错误码（除标 2 者外，退出码皆 1）：
 
@@ -206,31 +207,35 @@ AU6│}
 | `E_AMBIGUOUS_ANCHOR` | 锚在文件中多次出现，拒猜 |
 | `E_STALE_RANGE` | 目标区间内之行与基线不符 |
 | `E_OVERLAP` | 同次调用两 `-c` 改同一段 |
-| `E_BAD_ANCHOR` | 锚形非 3 位 base62 → 退出码 **2** |
+| `E_BAD_ANCHOR` | 锚形非 3 位 base62 → 退出码 **2**（带 `│` 的整行会给出定向提示） |
+| `E_ANCHOR_IN_CONTENT` | 替换文本行首误带本文件锚点（如 `CTt│foo`），拒写 |
+
+替换文本里行首像锚点、但**不属于本文件当前锚点**时（例如贴回来的是旧锚点），内容照写，只往 stderr 打一条 `W_SERVED_PREFIX_MISMATCH` / `W_NEVER_SERVED_SHAPE` 软警告；`--json` 时这些警告进 `warnings` 字段。
 
 ### `append` / `prepend` —— 单锚点插行
 
 ```
-append  ANCHOR CONTENT
-prepend ANCHOR CONTENT
+append  FILE ANCHOR CONTENT
+prepend FILE ANCHOR CONTENT
 append  -f FILE ANCHOR CONTENT
-append  -c ANCHOR CONTENT
+append  -f FILE -c ANCHOR CONTENT
 ```
 
-把 `CONTENT` 插到 `ANCHOR` 所指那一行**之后**（`prepend` 则之前）。位置只由单个锚点给出，所以文件可以省：工具从基线反查锚点属于哪个文件，多个文件都读过同一锚点时报 `E_AMBIGUOUS_ANCHOR`，用 `-f FILE` 指明。`CONTENT` 里的分行必须是**真换行**（`$'a\nb'`、here-doc）；`""` 表示插入一个空行；被锚定的那一行原样保留、锚点不变。
+把 `CONTENT` 插到 `ANCHOR` 所指那一行**之后**（`prepend` 则之前）。`FILE` 必填：放在最前面时可以省掉 `-f`（与 `read` / `write` / `edit` 一致）。位置只由那**单个锚点**定，所以文件必须点名 —— 工具不做跨文件反查。`CONTENT` 里的分行必须是**真换行**（`$'a\nb'`、here-doc、命令替换），与 `edit` 的替换文本同源；`""` 表示插入一个空行；被锚定的那一行原样保留、锚点不变。
 
 ```bash
 $ read -f src/app.ts 1:3
 nVR│const x = 1;
-$ append nVR "const y = 2;"                  # 插在 nVR 那行之后
-appended src/app.ts (3 → 4 lines, +1)
+$ append src/app.ts nVR "const y = 2;"           # 插在 nVR 那行之后
+appended ok
   AU6│}
   nVR│const x = 1;
 + 7Kd│const y = 2;
   m1Z│const z = 3;
+src/app.ts (3 → 4 lines, +1)
 ```
 
-实现上就是「把被锚定的那一行替换成 它自己 + 新行」，所以校验链、撤销、基线重建与 `edit` 完全一致：锚点过期同样报 `E_STALE_*`，`undo` 里记的 kind 是 `append` / `prepend`。`CONTENT` 恰好是 `-v` / `-q` / `-h` / `-f` / `-c` / `--json` 这类 rweg 认得的 flag 时，改用 `-c ANCHOR CONTENT` 形态传。
+实现上就是「把被锚定的那一行替换成 它自己 + 新行」，所以校验链、撤销、基线重建与 `edit` 完全一致：锚点过期同样报 `E_STALE_*`，`undo` 里记的 kind 是 `append` / `prepend`。`CONTENT` 恰好是 `-v` / `-q` / `-h` / `-f` / `-c` / `--json` 这类 rweg 认得的 flag 时，改用 `-c ANCHOR CONTENT` 形态传（`append FILE -c ANCHOR CONTENT` 或 `append -f FILE -c ANCHOR CONTENT`）。
 
 ### `write` —— 全量落笔
 
@@ -277,7 +282,8 @@ $ grep -n hello src/
 6:6PY│export default hello;
 
 $ edit -f src/app.ts -c 6PY:6PY "export default hello as greet;"
-edited src/app.ts (6 → 6 lines, +1 -1)
+edited ok
+src/app.ts (6 → 6 lines, +1 -1)
 ```
 
 回退之法（rweg 只作最小解析，余参数原样交 `rg`）：
@@ -318,7 +324,8 @@ undo -f FILE
 
 ```bash
 $ edit src/app.ts nVR:nVR "const x = 42;"
-edited src/app.ts (6 → 6 lines, +1 -1)
+edited ok
+src/app.ts (6 → 6 lines, +1 -1)
 $ undo src/app.ts
 undone edit  src/app.ts (6 lines restored)
 $ undo src/app.ts
@@ -334,7 +341,7 @@ hint: undo 只回退本 namespace 里 rweg 自己写过的最近 16 次改动；
 core-rweg prompt          # 打印整段模板
 ```
 
-输出是一份可直接贴进 system prompt 或项目 `AGENTS.md` 的约定：各工具何时用、命令形态（含 `read FILE` / `edit FILE FROM:TO` / `write FILE` 简写）、输出读法（`# 路径 (行数, 行尾)` / `FROM:TO:` / `锚点│内容`，以及 `edit` 的 git 风格差异与 `...` 省略）、锚点规则（只在本终端、报 `E_STALE_*` 即重读、回传行不入基线、多组改动原子）、撤销语义、退出码 0/1/2/3、回退路径（`builtin read`、grep 透传、`-E`/`-G` 兼容）、以及配置钉住（`RWEG_PIN_CONFIG`）。
+输出是一份可直接贴进 system prompt 或项目 `AGENTS.md` 的约定：各工具何时用、命令形态（含 `read FILE` / `edit FILE FROM:TO` / `write FILE` / `append FILE ANCHOR` 简写）、输出读法（`# 路径 (行数, 行尾)` / `FROM:TO:` / `锚点│内容`，以及 `edit` 的 git 风格差异与 `...` 省略）、锚点规则（只在本终端、见到的行一律入基线、报 `E_STALE_*` 按 hint 处理、多组改动原子）、撤销语义、退出码 0/1/2/3、回退路径（`builtin read`、grep 透传、`-E`/`-G` 兼容）、以及配置钉住（`RWEG_PIN_CONFIG`）。
 
 模板随二进制走（`internal/app/prompt.go`），不依赖安装目录里另存文件，故 `core-rweg prompt` 与当前版本永远一致；各工具自己的 `-h` 末尾也会指到这里。
 
@@ -349,7 +356,8 @@ core-rweg prompt          # 打印整段模板
 | 旧锚改新行 | 编辑释放之锚入 `retired`，禁再分配 |
 | 锚在文件中多次出现而“随便挑一” | `E_AMBIGUOUS_ANCHOR` 直拒 |
 | 内容外改仍照旧落笔 | 逐行比基线；`E_STALE_RANGE` + 回传现状 |
-| 持回传锚绕过 `read` | 回传行不入基线 |
+| 见过的行却不可编辑（被迫重读） | `read` / `grep` / `write` / diff / 失败回显一律入基线 |
+| 把 read 输出整行当替换内容 | 行首锚点命中本文件 → `E_ANCHOR_IN_CONTENT` 直拒 |
 | 未读之行顺为“已读” | 基线以空串示“未 serve”，位移后仍空串 |
 | 区间边界靠“行数未变”猜 | 逐行记行尾 + 显式映射，不猜 |
 | 半截文件（写半而崩） | 临时文件 + `rename`；库写单事务 |
@@ -454,7 +462,7 @@ core-rweg doctor      # 环境自检（路径 / 配置 / 库 / rg / 自检向量
 │   ├── store/              SQLite（served / retired / snapshot / undo）+ 惰性 GC
 │   ├── docfile/            文件加载（BOM / 行尾 / 编码 / 二进制探测）
 │   ├── ranges/             RANGE 解析 / 合并 / 基线集合
-│   ├── edit/               校验链 + 原地应用 + buildDiff（git 风格统一 diff）
+│   ├── edit/               校验链 + 原地应用 + buildDiff（git 风格统一 diff）+ 内容行首锚点扫描
 │   └── app/                CLI：子命令分发（read/write/edit/grep/undo/append/prepend + cfg/doctor/prompt…）/ grep 参数归一化
 ├── scripts/
 │   ├── build.sh            编译 + 铺产物（./dist/）+ selftest

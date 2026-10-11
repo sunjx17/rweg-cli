@@ -225,9 +225,24 @@ CONTENT 里的分行必须是**真换行**（$'a\nb'、here-doc，或从 stdin �
 一次调用的多组改动原子生效：任一失败则文件与库都不动。
 每次 edit 前的内容进撤销栈，undo 可退回一步（编码 / 行尾一并回来）。
 
-锚点必须来自本终端的 read 或 grep。任一锚点过期 →
-硬拒绝并回传该区域当前锚点（回传的行**不写 served**，
-必须重新 read 才能重试 —— fail-closed，防静默写错行）。
+成功输出是三段：一行确认（"edited ok" / "appended ok" / "prepended ok"）+
+git 风格的差异正文 + 一行收尾（路径与行数变化）：
+
+  appended ok
+    Wot│a
+  + 7O8│33
+    rKa│b
+t.txt (2 → 3 lines, +1)
+
+-q / --quiet 只留差异正文（确认行与收尾行都不打）。
+
+锚点必须来自本终端的 read / grep。write 回传的全文、edit 回传的 diff（含上下文行）
+与失败回显的当前区间也都算"见过"——它们一律进 served，可以直接拿来 edit。
+任一锚点过期 → 硬拒绝并回传该区域当前锚点，回显的行随即进 served，
+可以直接用它们重试，不必先重新 read。
+替换文本里误带行首锚点（把 read 输出整行贴回来，如 "CTt│foo"）：
+命中本文件当前锚点的行硬拒（E_ANCHOR_IN_CONTENT，不写盘），
+其余只给 W_ 软警告，内容照写。
 `
 	case ToolGrep:
 		return `grep [rg 的参数]... [--] 路径
@@ -273,17 +288,18 @@ func insertHelp(tool Tool) string {
 	if tool == ToolPrepend {
 		name, where = "prepend", "之前"
 	}
-	return name + ` ANCHOR CONTENT
+	return name + ` FILE ANCHOR CONTENT
 ` + name + ` -f FILE ANCHOR CONTENT
-` + name + ` -c ANCHOR CONTENT
+` + name + ` FILE -c ANCHOR CONTENT
 
 把 CONTENT 插到 ANCHOR 所指那一行**` + where + `**（append 在后，prepend 在前）。
 
-ANCHOR 是单行锚点（3 个 base62 字符），必须来自本终端的 read / grep。
-位置只由锚点决定，所以 FILE 可以省：工具从 served 基线反查锚点属于哪个文件，
-多个文件都 serve 过同一锚点时报 E_AMBIGUOUS_ANCHOR，用 -f FILE 指明。
+FILE 必填：放在最前面时可以省掉 -f（与 read / write / edit 一致）。
+ANCHOR 是单行锚点（3 个 base62 字符），必须来自本终端的 read / grep；
+位置只由这**单个锚点**决定，文件必须点名 —— 工具不做跨文件反查。
 
-CONTENT 里的分行必须是**真换行**（$'a\nb'、here-doc）；"" 表示插入一个空行。
+CONTENT 里的分行必须是**真换行**（$'a\nb'、here-doc、命令替换），与 edit 的
+替换文本同源；"" 表示插入一个空行。
 被锚定的那一行原样保留、锚点不变：实现上就是"把它替换成它自己 + 新行"，
 所以校验链、undo、served 重建与 edit 完全一致（锚点过期同样报 E_STALE_*）。
 CONTENT 恰好是 -v / -q / -h / -f / -c / --json 这类 rweg 认得的 flag 时，

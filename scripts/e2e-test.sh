@@ -50,7 +50,7 @@ mkdir -p "$_home/bin" "$_home/scripts" "$_home/db"
 
 # 给**原生**程序（go、core-rweg.exe）的路径先转 Windows 形态：
 # MSYS_NO_PATHCONV=1 的 shell（dsh 等 agent shell）不替参数做转换，
-# /tmp/... 会变成当前盘根下的 C:\tmp\...，编译产物与 install-links 全落空。
+# /tmp/... 会变成当前盘根下的 C:\tmp\...，编译产物就落到那里，临时套件里只剩空目录。
 native() {
 	if command -v cygpath >/dev/null 2>&1; then
 		cygpath -w "$1"
@@ -63,9 +63,9 @@ if ! go build -trimpath -o "$(native "$_home/bin/core-rweg.exe")" ./cmd/core-rwe
 	cat "$_work/build.log" >&2
 	exit 1
 fi
-"$_home/bin/core-rweg.exe" install-links "$(native "$_home/bin")" >/dev/null
 cp -f "$_root/dist-home/rweg.toml" "$_home/rweg.toml"
 cp -f "$_root/scripts/env.sh" "$_home/scripts/env.sh"
+cp -f "$_root/scripts/env.aggressive.sh" "$_home/scripts/env.aggressive.sh"
 
 echo "rweg e2e test ($_root)"
 
@@ -84,8 +84,12 @@ new_sandbox() { # new_sandbox [子目录...]
 	for d in "$@"; do mkdir -p "$_sb/$d"; done
 }
 
-# 在沙箱里跑命令。source env.sh 是**真实使用路径**：
-# read/write/edit/grep 是 bash 内置命令，只有 env.sh 的函数能压过它们。
+# 在沙箱里跑命令。source env.aggressive.sh（它先 source env.sh）是**真实使用路径**：
+# read / write / edit / grep 在 bash 里是内置或 PATH 命令，只有接管层的同名函数压得过
+# 它们 —— 所以下文直接用短名；非侵入模式对应 hread / hwrite / hedit / hgrep。
+#
+# 调用者 shell 里的 $RWEG_PIN_CONFIG 由 run 先 unset：它来自你自己 source 过的 env.sh，
+# 不清掉就把沙箱的 rweg.toml 整个顶掉，配置与库都落到调用者那边。
 #
 # ⚠️ 变量必须在 source **之前 export**：
 # 写成 `RWEG_NS=x . env.sh` 是"给 source 加临时变量"，被 source 的脚本
@@ -96,7 +100,8 @@ run() { # run <沙箱> <额外 export 串（可为空）> <命令...>
 	(
 		builtin cd "$d" || exit 1
 		if [ -n "$envs" ]; then export $envs; fi
-		. "$_home/scripts/env.sh" >/dev/null 2>&1
+		unset RWEG_PIN_CONFIG
+		. "$_home/scripts/env.aggressive.sh" >/dev/null 2>&1
 		"$@"
 	)
 }
@@ -113,11 +118,13 @@ rsh_env() { # rsh_env <沙箱> <export 串> <命令...>
 	run "$d" "$envs" "$@"
 }
 
-# 只用 exe 裸路径（不 source env.sh）—— 场景 L 验"没 source 也能用"。
+# 只用二进制裸路径、不经 env.sh 的函数（子命令形态）—— 场景 L 验"没 source 也能用"。
+# bin/ 里只有 core-rweg 一个二进制，工具靠子命令区分（不再有 read.exe 之类的硬链接）。
 raw() { # raw <沙箱> <工具名> <参数...>
 	local d="$1" tool="$2"
 	shift 2
-	( builtin cd "$d" || exit 1; unset RWEG_NS; "$_home/bin/$tool.exe" "$@" )
+	( builtin cd "$d" || exit 1; unset RWEG_NS RWEG_PIN_CONFIG
+	  "$_home/bin/core-rweg.exe" "$tool" "$@" )
 }
 
 SEP='│'   # 锚点与内容之间的分隔符（$'\u2502' 在 MSYS bash 下不展开，故写字面量）
@@ -152,7 +159,8 @@ check "6 行锚点序列（与参考实现一致）" "CTt,Um7,AU6,nVR,yAZ,6PY," 
 
 # 第 4 行替换成 3 行：plan §2.4 的实测值 → EPx / jDo / BlU，未动行锚点全保留。
 rc_out="$(rsh "$_sb" edit -f src/app.ts -c nVR:nVR "$(printf 'const x = 42;\nconst z = 3;\nlet w = 4;')" 2>/dev/null)"
-check "edit 行数摘要" "edited src/app.ts (6 → 8 lines, +3 -1)" "$(printf '%s\n' "$rc_out" | sed -n 1p)"
+check "edit 摘要（确认行 + 收尾行）" "edited ok
+src/app.ts (6 → 8 lines, +3 -1)" "$(printf '%s\n' "$rc_out" | sed -n '1p;$p')"
 check "替换后的新锚点" "EPx,jDo,BlU," \
 	"$(printf '%s\n' "$rc_out" | grep '^+' | awk -F"$SEP" '{print $1}' | sed 's/^+ //' | tr '\n' ',')"
 
@@ -181,14 +189,13 @@ contains "错误码" "E_STALE_RANGE" "$err"
 contains "说明行" "lines 1-3 changed since read" "$err"
 contains "回传块头" "Current range (1-3):" "$err"
 contains "回传的是**当前**锚点" "nEt${SEP}  console.log(\"world!!!\");" "$err"
-contains "提示先 read" "hint: read -f src/app.ts 1:3" "$err"
+contains "提示可直接重试" "hint: retry with the anchors above (lines 1-3 are served now)" "$err"
 check "拒绝时文件未被改动" "  console.log(\"world!!!\");" "$(sed -n 2p "$_sb/src/app.ts")"
 
-# 回传的行**不写 served** → 拿回传锚点直接重试必须再被拒
-rerr="$(rsh "$_sb" edit -f src/app.ts -c nEt:nEt "x" 2>&1 >/dev/null)"
-rcv="$(rsh "$_sb" edit -f src/app.ts -c nEt:nEt "x" >/dev/null 2>&1; echo $?)"
-check "回传锚点不能直接重试（rc）" "1" "$rcv"
-contains "回传锚点不在 served" "E_UNKNOWN_ANCHOR" "$rerr"
+# 回显的行随即进 served → 拿回传锚点可以直接重试，不必先重新 read
+out="$(rsh "$_sb" edit -f src/app.ts -c nEt:nEt 'console.log("world??");' 2>/dev/null)"
+contains "回传锚点可直接重试" "edited ok" "$(printf '%s\n' "$out" | sed -n 1p)"
+check "重试改到第 2 行" 'console.log("world??");' "$(sed -n 2p "$_sb/src/app.ts")"
 
 # 先 read 建立新基线，再用新锚点重试 → 成功
 rsh "$_sb" read -f src/app.ts 1:3 >/dev/null 2>&1
@@ -281,7 +288,7 @@ rsh "$_sb" write -f src/empty.ts -c "" >/dev/null 2>&1
 check "写空文件（rc）" "0" "$?"
 check "空文件大小" "0" "$(wc -c < "$_sb/src/empty.ts" | tr -d ' ')"
 
-printf 'l1\nl2\n' | ( builtin cd "$_sb" && RWEG_NS="$NS" . "$_home/scripts/env.sh" >/dev/null 2>&1 && write -f src/pipe.ts ) >/dev/null 2>&1
+printf 'l1\nl2\n' | ( builtin cd "$_sb" && export RWEG_NS="$NS" && unset RWEG_PIN_CONFIG && . "$_home/scripts/env.aggressive.sh" >/dev/null 2>&1 && write -f src/pipe.ts ) >/dev/null 2>&1
 check "从 stdin 写（rc）" "0" "$?"
 check "stdin 内容行数" "2" "$(wc -l < "$_sb/src/pipe.ts" | tr -d ' ')"
 
@@ -349,7 +356,7 @@ check "grep 锚点直接 edit（rc）" "0" "$?"
 check "文件已改" "export default hello as greet;" "$(sed -n 6p "$_sb/src/app.ts")"
 
 # 管道输入 → 完全透传
-out="$(cat "$_sb/src/app.ts" | (builtin  cd "$_sb" && RWEG_NS="$NS" . "$_home/scripts/env.sh" >/dev/null 2>&1 && grep hello ) 2>/dev/null)"
+out="$(cat "$_sb/src/app.ts" | (builtin cd "$_sb" && export RWEG_NS="$NS" && unset RWEG_PIN_CONFIG && . "$_home/scripts/env.aggressive.sh" >/dev/null 2>&1 && grep hello ) 2>/dev/null)"
 check "管道输入透传（原始行为）" "function hello() {
 export default hello as greet;" "$out"
 
@@ -578,11 +585,10 @@ contains "core-rweg cfg -h" "core-rweg cfg" "$(rsh "$_sb" core-rweg cfg -h 2>&1 
 contains "core-rweg ns -h" "core-rweg ns" "$(rsh "$_sb" core-rweg ns -h 2>&1 | sed -n 1p)"
 contains "core-rweg gc -h" "core-rweg gc" "$(rsh "$_sb" core-rweg gc -h 2>&1 | sed -n 1p)"
 contains "undo -h" "undo [FILE]" "$(rsh "$_sb" undo -h 2>&1 | sed -n 1p)"
-contains "core-rweg install-links -h" "core-rweg install-links" \
-	"$(rsh "$_sb" core-rweg install-links -h 2>&1 | sed -n 1p)"
-check "install-links -h 不建 -h 目录" "no" "$([ -e "$_sb/-h" ] && echo yes || echo no)"
-rcv="$(rsh "$_sb" core-rweg install-links -x >/dev/null 2>&1; echo $?)"
-check "install-links 拒绝 - 开头的目录 → 2" "2" "$rcv"
+contains "append -h" "append FILE ANCHOR CONTENT" "$(rsh "$_sb" append -h 2>&1 | sed -n 1p)"
+contains "prepend -h" "prepend FILE ANCHOR CONTENT" "$(rsh "$_sb" prepend -h 2>&1 | sed -n 1p)"
+rcv="$(rsh "$_sb" core-rweg nosuchcmd >/dev/null 2>&1; echo $?)"
+check "未知子命令 → 2" "2" "$rcv"
 prompt="$(rsh "$_sb" core-rweg prompt 2>/dev/null)"
 contains "prompt 含 read 用法" "read  FILE [RANGE ...]" "$prompt"
 contains "prompt 含 edit 用法" 'edit  FILE FROM:TO' "$prompt"
@@ -619,7 +625,7 @@ check "undo 不带路径回退最近一次" "no" "$([ -f "$_sb/u/latest.ts" ] &&
 # 空栈与别名
 check "没有记录可撤销 → 1" "1" "$(rsh "$_sb" undo u/app.ts >/dev/null 2>&1; echo $?)"
 contains "空栈报 E_NO_UNDO" "E_NO_UNDO" "$(rsh "$_sb" undo u/app.ts 2>&1)"
-contains "undo_last_edit 别名可用" "E_NO_UNDO" "$(rsh "$_sb" undo_last_edit u/app.ts 2>&1)"
+contains "hundo_last_edit 别名可用" "E_NO_UNDO" "$(rsh "$_sb" hundo_last_edit u/app.ts 2>&1)"
 contains "undo 不支持 --json" "not supported" "$(rsh "$_sb" undo --json 2>&1)"
 # 超过 4 MiB 的前像不留副本：明确报 E_UNDO_TOO_BIG
 yes "0123456789012345678901234567890123456789" | head -c 4300000 > "$_sb/u/big.txt"
@@ -629,6 +635,58 @@ contains "大前像报 E_UNDO_TOO_BIG" "E_UNDO_TOO_BIG" "$(rsh "$_sb" undo u/big
 rm -f "$_sb/u/big.txt"
 
 # ─────────────────────────────────────────────────────────────
+section K "append / prepend：单锚点插行"
+# ─────────────────────────────────────────────────────────────
+new_sandbox src
+write_app_ts "$_sb" src/app.ts
+rsh "$_sb" read -f src/app.ts 1:6 >/dev/null 2>&1
+a4="$(rsh "$_sb" read -f src/app.ts 4:4 2>/dev/null | anchor_at 1)"
+
+# 文件放在最前（可省 -f）；被锚定的那一行原样保留、锚点不变
+out="$(rsh "$_sb" append src/app.ts "$a4" "const y = 2;" 2>/dev/null)"
+check "append 摘要（确认行 + 收尾行）" "appended ok
+src/app.ts (6 → 7 lines, +1)" "$(printf '%s\n' "$out" | sed -n '1p;$p')"
+check "append 插在锚定行之后" "const y = 2;" "$(sed -n 5p "$_sb/src/app.ts")"
+check "被锚定的行锚点不变" "$a4" "$(rsh "$_sb" read -f src/app.ts 4:4 2>/dev/null | anchor_at 1)"
+
+# prepend 插在锚定行之前；内容恰好是 rweg 认得的 flag 时用 -c 形态递进去
+out="$(rsh "$_sb" prepend src/app.ts -c "$a4" "-v" 2>/dev/null)"
+check "prepend 摘要（确认行 + 收尾行）" "prepended ok
+src/app.ts (7 → 8 lines, +1)" "$(printf '%s\n' "$out" | sed -n '1p;$p')"
+check "prepend 插在锚定行之前" "-v" "$(sed -n 4p "$_sb/src/app.ts")"
+check "-c 形态保住看似 flag 的内容" "const x = 1;" "$(sed -n 5p "$_sb/src/app.ts")"
+
+# "" = 插一个空行
+rsh "$_sb" read -f src/app.ts 3:3 >/dev/null 2>&1
+a3="$(rsh "$_sb" read -f src/app.ts 3:3 2>/dev/null | anchor_at 1)"
+rsh "$_sb" append src/app.ts "$a3" "" >/dev/null 2>&1
+check "空内容 = 插一个空行" "" "$(sed -n 4p "$_sb/src/app.ts")"
+
+# undo 里记的 kind 用工具名
+contains "undo 记 append" "undone append" "$(rsh "$_sb" undo src/app.ts 2>/dev/null)"
+contains "再 undo 退 prepend" "undone prepend" "$(rsh "$_sb" undo src/app.ts 2>/dev/null)"
+
+# 文件必填：不给文件时第一个位置参数会被当成文件名 → 用法错误
+new_sandbox
+printf 'a\nSHARED\n' > "$_sb/one.ts"
+printf 'b\nSHARED\n' > "$_sb/two.ts"
+rsh "$_sb" read -f one.ts >/dev/null 2>&1
+rsh "$_sb" read -f two.ts >/dev/null 2>&1
+sh="$(rsh "$_sb" read -f one.ts 2:2 2>/dev/null | anchor_at 1)"
+err="$(rsh "$_sb" append "$sh" NEW 2>&1 >/dev/null)"
+contains "不给文件 → 指出缺 FILE" "FILE is required" "$err"
+rcv="$(rsh "$_sb" append "$sh" NEW >/dev/null 2>&1; echo $?)"
+check "不给文件 → 退出码 2" "2" "$rcv"
+rsh "$_sb" append -f two.ts "$sh" NEW >/dev/null 2>&1
+check "-f FILE 指明后成功" "NEW" "$(sed -n 3p "$_sb/two.ts")"
+
+# 参数错：形状非法 / 缺内容都是用法错误（2）
+rcv="$(rsh "$_sb" append ZZ NEW >/dev/null 2>&1; echo $?)"
+check "锚点形状非法 → 2" "2" "$rcv"
+rcv="$(rsh "$_sb" append -f one.ts "$sh" >/dev/null 2>&1; echo $?)"
+check "缺 CONTENT → 2" "2" "$rcv"
+
+# ─────────────────────────────────────────────────────────────
 section D "edit 的差异形态（git 风格）"
 # ─────────────────────────────────────────────────────────────
 new_sandbox
@@ -636,7 +694,7 @@ printf 'a\nb\nc\nd\n' > "$_sb/d.txt"
 rsh "$_sb" read -f d.txt >/dev/null 2>&1
 d1="$(rsh "$_sb" read -f d.txt 2:2 2>/dev/null | tail -1 | awk -F"$SEP" '{print $1}')"
 out="$(rsh "$_sb" edit -f d.txt -c "$d1" B 2>/dev/null)"
-contains "头部计数 +1 -1" "(4 → 4 lines, +1 -1)" "$(printf '%s\n' "$out" | sed -n 1p)"
+contains "收尾行计数 +1 -1" "(4 → 4 lines, +1 -1)" "$(printf '%s\n' "$out" | tail -1)"
 contains "删除行带 - 前缀与旧锚点" "- ${d1}${SEP}b" "$out"
 contains "新增行带 + 前缀" "+ " "$out"
 contains "上下文行带两个空格前缀" "  " "$out"
@@ -645,7 +703,7 @@ printf 'x\ny\n' > "$_sb/ap.txt"
 rsh "$_sb" read -f ap.txt >/dev/null 2>&1
 ap1="$(rsh "$_sb" read -f ap.txt 1:1 2>/dev/null | tail -1 | awk -F"$SEP" '{print $1}')"
 out="$(rsh "$_sb" edit -f ap.txt -c "$ap1" $'x\nz' 2>/dev/null)"
-contains "只增不减时不出 -N" "(2 → 3 lines, +1)" "$(printf '%s\n' "$out" | sed -n 1p)"
+contains "只增不减时不出 -N" "(2 → 3 lines, +1)" "$(printf '%s\n' "$out" | tail -1)"
 contains "没删任何行" "+ " "$out"
 # 相距较远的块之间用 ... 省略，且只省略一次
 seq 1 20 | sed 's/^/line /' > "$_sb/far.txt"
@@ -653,7 +711,7 @@ rsh "$_sb" read -f far.txt >/dev/null 2>&1
 f2="$(rsh "$_sb" read -f far.txt 2:2 2>/dev/null | tail -1 | awk -F"$SEP" '{print $1}')"
 f18="$(rsh "$_sb" read -f far.txt 18:18 2>/dev/null | tail -1 | awk -F"$SEP" '{print $1}')"
 out="$(rsh "$_sb" edit -f far.txt -c "$f2" L2 -c "$f18" L18 2>/dev/null)"
-contains "远距离块头部计数 +2 -2" "(20 → 20 lines, +2 -2)" "$(printf '%s\n' "$out" | sed -n 1p)"
+contains "远距离块收尾行计数 +2 -2" "(20 → 20 lines, +2 -2)" "$(printf '%s\n' "$out" | tail -1)"
 check "省略行只出现一次" "1" "$(printf '%s\n' "$out" | grep -c '^\.\.\.$')"
 contains "未改动的行不重复打印" "line 1" "$out"
 

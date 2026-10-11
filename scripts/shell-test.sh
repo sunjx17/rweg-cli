@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # rweg 的 shell 层验收脚本。
 #
-# 覆盖那些**只有 source 了 env.sh 才会暴露**的问题——
+# 覆盖那些**只有 source 过入口脚本才会暴露**的问题——
 # Go 单测覆盖不到"bash builtin 压过 PATH"这类集成层面的坑。
-# 本脚本的第一条断言就是它，且它是整个套件能用与否的前提。
+# 套件主体跑在**侵入入口** env.aggressive.sh 上（read / write / edit / grep 被同名函数接管），
+# 那是下面断言所依赖的那一层；[1c] 另验非侵入入口 env.sh 不碰这四个名字。
 #
 # 功能语义（锚点稳定性 / 校验链 / 编码 / 原子性）在 e2e-test.sh 里。
 #
@@ -15,6 +16,13 @@
 
 set -uo pipefail
 
+# 调用者的 shell 若已经 source 过 env.sh / env.aggressive.sh，那些函数会随 export -f
+# 进到本脚本里；本脚本验的是"source 之后有什么"，所以先把继承来的 rweg 函数擦干净，
+# 子进程也不再收到 BASH_FUNC_* 导出。
+for _fn in read write edit grep cd hread hwrite hedit hgrep hundo happend hprepend hundo_last_edit undo append prepend core-rweg; do
+    unset -f "$_fn" 2>/dev/null || true
+done
+unset _fn
 _home="${RWEG_HOME:-$HOME/.rweg}"
 if [ -x "$_home/bin/core-rweg.exe" ]; then
 	_core="$_home/bin/core-rweg.exe"
@@ -25,9 +33,10 @@ if [ ! -x "$_core" ]; then
 	echo "rweg not installed at $_home — run scripts/install.sh first" >&2
 	exit 1
 fi
-_env="$_home/scripts/env.sh"
-# 工具输出里的路径是**原生**形态（C:/... 或 C:\...），$_home 则可能是 POSIX
-# 形态（$HOME/.rweg）—— 比较前统一过一遍 cygpath。
+_env="$_home/scripts/env.aggressive.sh"  # 套件主体用的入口：先 source env.sh 再接管同名命令
+_env_plain="$_home/scripts/env.sh"       # 非侵入入口：只加 h* 与 undo / append / prepend
+# 工具输出与 core-rweg 报的路径是**原生**形态（C:/... 或 C:\...），$_home 与 PATH
+# 里的项却可能是 POSIX 形态（$HOME/.rweg）—— 比较前按需要过一遍 cygpath。
 nat() {
 	if command -v cygpath >/dev/null 2>&1; then
 		cygpath -m "$1"
@@ -36,12 +45,42 @@ nat() {
 	fi
 }
 
+posix() { # → POSIX 形态（/c/...）：MSYS 的 PATH 与 $HOME/.rweg 用的是这一种
+	if command -v cygpath >/dev/null 2>&1; then
+		cygpath -u "$1"
+	else
+		printf '%s' "$1"
+	fi
+}
+
+win() { # → Windows 形态（C:\...）：core-rweg 报出来的路径是这一种
+	if command -v cygpath >/dev/null 2>&1; then
+		cygpath -w "$1"
+	else
+		printf '%s' "$1"
+	fi
+}
+
+low() { # → 全小写：Windows 路径比较不该被盘符 / 目录名的大小写影响
+	printf '%s' "$1" | tr 'A-Z' 'a-z'
+}
+
 pass=0
 fail=0
 ok()  { pass=$((pass+1)); printf '  ok    %s\n' "$1"; }
 bad() { fail=$((fail+1)); printf '  FAIL  %s\n         %s\n' "$1" "${2:-}"; }
 check() { # check <desc> <expected> <actual>
 	if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "want [$2] got [$3]"; fi
+}
+
+path_hits() { # path_hits <目录A> <目录B> —— 数 PATH 里等于 A 或 B 的项（不借 grep）
+	local n=0 d
+	while IFS= read -r d; do
+		case "$d" in
+			"$1" | "$2") n=$((n+1)) ;;
+		esac
+	done
+	printf '%s' "$n"
 }
 SEP='│'   # 锚点与内容之间的分隔符（$'\u2502' 在 MSYS bash 下不展开，故写字面量）
 
@@ -64,15 +103,19 @@ EOF
 export RWEG_HOME="$_home"
 export RWEG_WALKUP=0
 unset RWEG_NS 2>/dev/null || true
+# 调用者 shell 里的这两个变量也清掉：RWEG_PIN_CONFIG 来自他自己 source 过的 env.sh，
+# 不清就会把沙箱的 rweg.toml 顶掉；RWEG_CONFIG 是显式覆盖，同样不该带进沙箱。
+unset RWEG_PIN_CONFIG RWEG_CONFIG 2>/dev/null || true
 
 # 在子 shell 里 source，避免污染调用者的环境。
 # 用 bash（而非 sh）以支持函数与 builtin 语义。
-rsh() { ( cd "$sandbox" && . "$_env" >/dev/null 2>&1 && "$@" ) }
+rsh()  { ( cd "$sandbox" && . "$_env"       >/dev/null 2>&1 && "$@" ) }
+rshp() { ( cd "$sandbox" && . "$_env_plain" >/dev/null 2>&1 && "$@" ) }
 
 echo "rweg shell test ($_home)"
 echo
 
-# ── 1. builtin 覆盖（最关键：read 是 bash builtin，PATH 压不过它）──
+# ── 1. builtin 覆盖（env.aggressive.sh 那层：read 是 bash builtin，PATH 压不过它）──
 echo "[1] builtin 覆盖"
 check "read 是 function（压过 builtin）" "function" "$(rsh type -t read)"
 check "grep 是 function"                  "function" "$(rsh type -t grep)"
@@ -103,11 +146,16 @@ check "read 裸名（无扩展名文件）归 rweg" "# notes (1 line, lf)" \
     "$(rsh bash -c 'read notes 2>/dev/null | head -1')"
 check "裸名 + 范围 与 裸名单独 同路径" "3" \
     "$(rsh bash -c 'read notes 1 2>/dev/null | wc -l')"
-# 无重定向的 stdin 用一个 3 秒不产出数据的管道顶上；RWEG_READ_TIMEOUT=1 让
-# 两次调用各等 1 秒即返回，断言只看"是否 >128"（具体值随信号 14 浮动）。
+# 无重定向的 stdin 换成"一直开着但不产出数据"的进程替换（sleep 6），RWEG_READ_TIMEOUT=1
+# 让它等 1 秒就返回；断言只看"是否 >128"（具体值随信号 14 浮动）。
+# ⚠️ 不能用 `( sleep 3 ) | rsh ...`：source env.sh 本身要一秒多（原生进程 + cygpath），
+#    读操作因此晚开始，写端一退出就是 EOF（rc 1），而那时刻界还没到 —— 断言会误报。
+#    < <(sleep 6) 不拖住命令退出（bash 不等进程替换的子进程），界一定先到。
+# 两条路径各起一条，不在同一个写端上连读两次：第一次超时后再读，可能直接是 EOF。
 _toerr="$sandbox/.read-timeout.err"
-_rcs="$( ( sleep 3 ) | rsh bash -c 'RWEG_READ_TIMEOUT=1; read -r _v; a=$?; read nosuchfile; b=$?; echo "$a $b"' 2>"$_toerr" | tail -1)"
-_a="${_rcs%% *}"; _b="${_rcs##* }"
+: > "$_toerr"
+_a="$(rsh bash -c 'RWEG_READ_TIMEOUT=1; read -r _v; echo $?' < <(sleep 6) 2>"$_toerr")"
+_b="$(rsh bash -c 'RWEG_READ_TIMEOUT=1; read nosuchfile; echo $?' < <(sleep 6) 2>>"$_toerr")"
 check "无输入：read -r 有界等待（>128，不挂死）" "yes" \
     "$([ "${_a:-0}" -gt 128 ] 2>/dev/null && echo yes || echo no)"
 check "无输入：裸词 read nosuchfile 同样不挂死（>128）" "yes" \
@@ -118,21 +166,38 @@ case "$(cat "$_toerr" 2>/dev/null)" in
 esac
 check "RWEG_READ_TIMEOUT=0 关上限后重定向语义不变" "builtin-probe" \
     "$(rsh bash -c 'RWEG_READ_TIMEOUT=0; read -r _rweg_v < .probe; printf "%s" "$_rweg_v"' 2>/dev/null)"
+
 # ── 1b. source 的输出面 ──
 echo
 echo "[1b] source 的输出"
-check "source 默认静默（stdout + stderr 皆空）" "" "$( ( . "$_env" ) 2>&1 )"
+check "env.sh 默认静默（stdout + stderr 皆空）" "" "$( ( . "$_env_plain" ) 2>&1 )"
+check "env.aggressive.sh 默认静默" "" "$( ( . "$_env" ) 2>&1 )"
 # 不用管道接 grep：banner 是多行，grep -q 命中首行即退出，写方吃 SIGPIPE，
 # 管道形态在负载下会偶发"没看到 banner"。先收进变量再判，顺带留证。
-_vout="$( ( export RWEG_VERBOSE=1; . "$_env" ) 2>&1 >/dev/null )"
+_vout="$( ( export RWEG_VERBOSE=1; . "$_env_plain" ) 2>&1 >/dev/null )"
 case "$_vout" in
-	*rweg\ ready*) ok "RWEG_VERBOSE=1 打就绪信息" ;;
-	*) bad "RWEG_VERBOSE=1 打就绪信息" "got [$_vout]" ;;
+    *rweg\ ready*) ok "RWEG_VERBOSE=1 打就绪信息" ;;
+    *) bad "RWEG_VERBOSE=1 打就绪信息" "got [$_vout]" ;;
+esac
+case "$( ( export RWEG_VERBOSE=1; . "$_env" ) 2>&1 >/dev/null )" in
+    *接管*) ok "aggressive 就绪信息里点出接管了哪四个名字" ;;
+    *) bad "aggressive 就绪信息里点出接管了哪四个名字" "got [$( ( export RWEG_VERBOSE=1; . "$_env" ) 2>&1 >/dev/null )]" ;;
 esac
 check "就绪信息走 stderr，不脏 stdout" "" \
-	"$( ( export RWEG_VERBOSE=1; . "$_env" ) 2>/dev/null )"
+    "$( ( export RWEG_VERBOSE=1; . "$_env" ) 2>/dev/null )"
 check "RWEG_VERBOSE=0 仍静默" "" "$( ( export RWEG_VERBOSE=0; . "$_env" ) 2>&1 )"
 
+# ── 1c. 非侵入入口 env.sh：同名命令一个都不碰 ──
+echo
+echo "[1c] 非侵入入口 env.sh"
+check "read 仍是 builtin（未被接管）" "builtin" "$(rshp type -t read)"
+check "grep 未被接管（仍是 PATH 上的命令）" "file" "$(rshp type -t grep)"
+check "hread 就绪" "function" "$(rshp type -t hread)"
+check "hwrite / hedit / hgrep 就绪" "function/function/function" \
+    "$(rshp bash -c 'printf "%s/%s/%s" "$(type -t hwrite)" "$(type -t hedit)" "$(type -t hgrep)"')"
+check "undo / append / prepend（与 bash 不重名）就绪" "function/function/function" \
+    "$(rshp bash -c 'printf "%s/%s/%s" "$(type -t undo)" "$(type -t append)" "$(type -t prepend)"')"
+check "子进程也拿到 h*（export -f）" "function" "$(rshp bash -c 'type -t hread')"
 # ── 2. 命令可用性 ──
 echo
 echo "[2] 命令可用性"
@@ -146,10 +211,14 @@ check "grep -n hello 带行号" "1" \
 check "grep 输出带锚点" "1:CTt${SEP}function hello() {" \
 	"$(rsh grep -n hello app.ts 2>/dev/null | sed -n 2p)"
 
-# 组合短选项：透传分支（无路径 / -q / -l）把参数交给 rg 时，`-qE` 必须拆成
-# `-q` 再把 E 吃掉；整串落到 rg 会被当成 `-E` = --encoding 直接报错。
+# 组合短选项：透传分支（无路径 / -q / -l）把参数交给 rg 时，`-qE` 必须拆成 `-q`
+# 再把 E 吃掉；整串落到 rg 会被当成 `-E` = --encoding。
+# ⚠️ 模式只用交替（`|`），不用 `{n}` 量词：rweg 是原生程序，起系统 grep 时参数要经
+#    MSYS 的命令行解析，`{4}` 这类会被吃掉、grep 于是报"无匹配"—— 那是取参层面的
+#    环境限制，与本条要验的短选项拆分无关；带上它，断言会随 PATH 上是系统 grep 还是
+#    原生 grep（如 coreutils 的）而变。
 check "grep -qE 组合短选项（透传分支）" "yes" \
-    "$(echo "wAB12-Oc2hc.db" | rsh bash -c 'grep -qE "^w[A-Za-z0-9]{4}-[A-Za-z0-9]{5}[.]db$" && echo yes || echo no' 2>/dev/null)"
+    "$(echo "wAB12-Oc2hc.db" | rsh bash -c 'grep -qE "^(wAB12|zzzz)-Oc2hc[.]db$" && echo yes || echo no' 2>/dev/null)"
 check "grep -cE 组合短选项（计数分支）" "1" \
     "$(rsh grep -cE "l+og" app.ts 2>/dev/null)"
 check "grep -qG 组合里也有 BRE 报错" "2" \
@@ -208,10 +277,10 @@ echo "[5] 幂等"
 ns_pair="$(rsh bash -c "unset RWEG_NS; . '$_env' >/dev/null 2>&1; a=\$RWEG_NS; . '$_env' >/dev/null 2>&1; b=\$RWEG_NS; echo \"\$a/\$b\"")"
 check "重复 source ns 不变" "$(echo "$ns_pair" | cut -d/ -f1)/$(echo "$ns_pair" | cut -d/ -f2)" "$ns_pair"
 check "ns 非空" "yes" "$([ -n "$(echo "$ns_pair" | cut -d/ -f1)" ] && echo yes || echo no)"
-# PATH 里的 bin 是 POSIX 形态（MSYS 的 PATH 只认 ':' 分隔），而 $_home 可能是
-# 原生形态（env.sh 导出的 RWEG_HOME 是 C:/...）—— 两种写法都算命中。
+# PATH 里的 bin 是 POSIX 形态（MSYS 的 PATH 只认 ':' 分隔），而 $_home 两种写法都可能
+# （RWEG_HOME 由调用者给：$HOME/.rweg 或 C:/...）—— 两种形态都算命中。
 pcount="$(rsh bash -c ". '$_env' >/dev/null 2>&1; . '$_env' >/dev/null 2>&1; echo \$PATH" |
-	tr ':' '\n' | grep -cxi -e "$_home/bin" -e "$(nat "$_home")/bin")"
+	tr ':' '\n' | path_hits "$_home/bin" "$(posix "$_home")/bin")"
 check "PATH 未重复堆积" "1" "$pcount"
 # 预置 RWEG_NS 不被覆盖
 pre="wPRE0-00001"
@@ -311,11 +380,12 @@ dbdir="${out%[\\/]$dbtail}"      # 去掉文件名 = <配置目录>/.db
 check "db 文件名 = <ns>.db" "yes" \
 	"$(echo "$dbtail" | grep -qE '^w[A-Za-z0-9]{4}-[A-Za-z0-9]{5}\.db$' && echo yes || echo "no ($dbtail)")"
 check "db 目录名 = .db" ".db" "$(basename "$dbdir")"
-# db 在沙箱内（不是安装目录）。两边都归一成原生形态再比，
-# 否则 POSIX 的 $_home 与原生 $out 永不相等，这条检查会空转。
-case "$out" in
-	*"$(nat "$_home")"*) bad "db 在沙箱目录内（非安装目录）" "got [$out]" ;;
-	*) ok "db 在沙箱目录内（非安装目录）" ;;
+# db 落在**沙箱**里（不是安装目录）：配置随 cwd 走，库跟着配置走。
+# 比前缀而不是走 grep：core-rweg 报的是 Windows 形态（反斜杠），大小写不作数。
+sb_win="$(low "$(win "$sandbox")")"
+case "$(low "$out")" in
+	"$sb_win"*) ok "db 在沙箱目录内（随沙箱的 rweg.toml）" ;;
+	*) bad "db 在沙箱目录内（随沙箱的 rweg.toml）" "got [$out] want under $sb_win" ;;
 esac
 
 # ── 8. 退出码 ──
