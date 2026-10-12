@@ -182,8 +182,10 @@ rsh "$_sb" read -f src/app.ts 1:6 >/dev/null 2>&1
 # 外部工具（formatter / git checkout）改了区间内的第 2 行
 sed -i 's/console\.log("world");/console.log("world!!!");/' "$_sb/src/app.ts"
 
-err="$(rsh "$_sb" edit -f src/app.ts -c CTt:AU6 "function hi() {" 2>&1 >/dev/null)"
-rcv="$(rsh "$_sb" edit -f src/app.ts -c CTt:AU6 "function hi() {" >/dev/null 2>&1; echo $?)"
+out="$(rsh "$_sb" edit -f src/app.ts -c CTt:AU6 "function hi() {" 2>&1)"
+rcv=$?
+err="$out"
+
 check "退出码" "1" "$rcv"
 contains "错误码" "E_STALE_RANGE" "$err"
 contains "说明行" "lines 1-3 changed since read" "$err"

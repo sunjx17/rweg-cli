@@ -472,8 +472,8 @@ core-rweg doctor      # 环境自检（路径 / 配置 / 库 / rg / 自检向量
 │   ├── env.sh              非侵入入口：h* 名字
 │   ├── env.aggressive.sh   侵入入口：同名接管 + cd 提示
 │   ├── env.restore.sh      反注册：source 它恢复内置
-│   ├── shell-test.sh       shell 层验收 62 项
-│   └── e2e-test.sh         e2e 189 项
+│   ├── shell-test.sh       shell 层验收 70 项
+│   └── e2e-test.sh         e2e 198 项
 ├── dist-home/rweg.toml     安装级配置模板
 ├── examples/project-rweg.toml  项目级配置模板
 ├── rweg.toml               本仓库配置
@@ -483,9 +483,9 @@ core-rweg doctor      # 环境自检（路径 / 配置 / 库 / rg / 自检向量
 ### 测验
 
 ```bash
-go test ./internal/...        # 216 个用例（190 个测试函数）
-./scripts/shell-test.sh       # 62 项：builtin 覆盖 / source 输出 / PATH / 幂等 / 配置钉住 / 退出码
-./scripts/e2e-test.sh         # 189 项：锚点稳定性 / 校验链 / 原子性 / 编码 / diff 形态 / 简写 / undo / -h / prompt
+go test ./internal/...        # 218 个用例（192 个测试函数）
+./scripts/shell-test.sh       # 70 项：builtin 覆盖 / source 输出 / PATH / 幂等 / 配置钉住 / 退出码
+./scripts/e2e-test.sh         # 198 项：锚点稳定性 / 校验链 / 原子性 / 编码 / diff 形态 / 简写 / undo / -h / prompt
 ```
 
 二者都真跑已装的 `$RWEG_HOME`，故改完先 `./scripts/build.sh && ./scripts/install.sh`。`build.sh` 与 `e2e-test.sh` 会把自己算出的路径经 `cygpath` 交给原生 `go`/`core-rweg.exe`（见其中 `native()`）：`MSYS_NO_PATHCONV=1` 的 shell（dsh 等 agent shell）里，`go build -o /c/...` 会写到 `C:\c\...`，dist 里留旧货 —— 表现为"改了代码、编译也过了，跑起来还是老行为"。
