@@ -4,6 +4,8 @@
 
 为终端编书者（人或 AI）授行锚之五器。
 
+**English**: rweg is a zero-config CLI suite of line-anchored file tools for AI agents — `read`, `edit`, `write`, `grep`, `undo`, `append`, `prepend`. Every line carries a stable 3-char anchor, so the agent edits by short anchors instead of re-echoing whole blocks (as str_replace does), with stale-anchor rejection, atomic multi-edit, undo, and UTF-8/GBK/UTF-16 + CRLF/BOM fidelity. Built for Git Bash / MSYS agent shells. Star it if it saves you tokens.
+
 ---
 
 ## 序
