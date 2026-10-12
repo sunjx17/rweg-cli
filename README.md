@@ -444,11 +444,12 @@ core-rweg doctor      # 环境自检（路径 / 配置 / 库 / rg / 自检向量
 
 ### namespace 与数据库
 
-- ns 形如 `wK3fP-9xT2q`：前绑 `cwd|配置目录`，后时间戳。生命周期 = 终端生命周期：存于环境变量，终端关则灭，不留全局状态。
+- ns 形如 `wK3fP-9xT2q`：前 4 位绑 `cwd|配置目录`，后 5 位是创建时刻。生命周期 = 终端生命周期：存于环境变量，终端关则灭，不留全局状态。
+- 同一目录开两个终端得不同 ns（后 5 位不同），served 状态互不干扰。
 - 一 ns 一库文件（`<db.dir>/<ns>.db`）。多终端接力，显式复用同一 `RWEG_NS`。
 - 配置被 `$RWEG_PIN_CONFIG` 钉住时不做 `cwd` 一致性检查（钉住即同一个项目，库不随 `cd` 变）。没钉而跨了目录报 `E_NS_CWD_MISMATCH` 时，`unset RWEG_NS` 让本 shell 按当前 cwd 重新派生即可恢复。
 - 回收以 TTL（缺省 24h）与惰性 GC；不设退出钩子。bash 子 shell 继承并触发 `EXIT` trap；`x=$(read -f f)` 毕则 ns 清，再调用撞 `E_NS_CWD_MISMATCH`。
-- 未 `source env.sh` 亦可用：ns 按 `cwd|配置目录` 确定性派生，`read` → `edit` 可行，然失跨终端隔离；stderr 一 WARN。
+- 未 `source env.sh` 亦可用：此时 ns 按 `cwd|配置目录` **确定性派生**（后 5 位固定为 `00000`，不取当前时刻），故裸调用的 `read` → `edit` 必然落在同一个 ns 上，链路通；代价是同目录的不同终端共用 served 状态，隔离性减弱。stderr 一 WARN。
 
 ---
 
@@ -473,7 +474,7 @@ core-rweg doctor      # 环境自检（路径 / 配置 / 库 / rg / 自检向量
 │   ├── env.aggressive.sh   侵入入口：同名接管 + cd 提示
 │   ├── env.restore.sh      反注册：source 它恢复内置
 │   ├── shell-test.sh       shell 层验收 70 项
-│   └── e2e-test.sh         e2e 198 项
+│   └── e2e-test.sh         e2e 202 项
 ├── dist-home/rweg.toml     安装级配置模板
 ├── examples/project-rweg.toml  项目级配置模板
 ├── rweg.toml               本仓库配置
@@ -483,9 +484,9 @@ core-rweg doctor      # 环境自检（路径 / 配置 / 库 / rg / 自检向量
 ### 测验
 
 ```bash
-go test ./internal/...        # 218 个用例（192 个测试函数）
+go test ./internal/...        # 220 个用例（194 个测试函数）
 ./scripts/shell-test.sh       # 70 项：builtin 覆盖 / source 输出 / PATH / 幂等 / 配置钉住 / 退出码
-./scripts/e2e-test.sh         # 198 项：锚点稳定性 / 校验链 / 原子性 / 编码 / diff 形态 / 简写 / undo / -h / prompt
+./scripts/e2e-test.sh         # 202 项：锚点稳定性 / 校验链 / 原子性 / 编码 / diff 形态 / 简写 / undo / -h / prompt
 ```
 
 二者都真跑已装的 `$RWEG_HOME`，故改完先 `./scripts/build.sh && ./scripts/install.sh`。`build.sh` 与 `e2e-test.sh` 会把自己算出的路径经 `cygpath` 交给原生 `go`/`core-rweg.exe`（见其中 `native()`）：`MSYS_NO_PATHCONV=1` 的 shell（dsh 等 agent shell）里，`go build -o /c/...` 会写到 `C:\c\...`，dist 里留旧货 —— 表现为"改了代码、编译也过了，跑起来还是老行为"。

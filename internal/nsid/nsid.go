@@ -9,6 +9,9 @@
 //	前 5 位绑定 cwd + 配置目录：不同项目天然隔离，
 //	  即使 DB 路径配错也不会串锚点。
 //	后 5 位是时间戳：同一目录的两个终端也隔离。
+//
+//	降级路径（$RWEG_NS 未设置）改用确定性 ns：时间戳段固定为 0，
+//	同一目录恒定，保证裸调用的 read → edit 链路通。
 package nsid
 
 import (
@@ -52,6 +55,9 @@ const (
 // New 生成一个新 ns：前 4 位 = base62(sha1(scope))，后 5 位 = base62(相对纪元的秒数)。
 //
 // scope 通常是 "<cwd>|<配置目录>"，让不同项目/不同配置天然隔离。
+//
+// 后 5 位带创建时刻，所以**同一 scope 两次调用得到不同 ns**（同目录的两个终端
+// 因此隔离）。需要"同 scope 恒定"的场合用 Degraded。
 func New(scope string, now time.Time) string {
 	sum := sha1.Sum([]byte(scope))
 	// 取前 8 字节当 uint64，再折成 4 位 base62（62^4 = 1477633，够用）
@@ -66,6 +72,23 @@ func New(scope string, now time.Time) string {
 // NewFor 按当前 cwd + 配置目录生成 ns。
 func NewFor(cwd, cfgDir string) string {
 	return New(cwd+"|"+cfgDir, time.Now())
+}
+
+// Degraded 生成一个**确定性** ns：scope 相同则结果永远相同。
+//
+// 时间戳段固定填 0（不取当前时刻），所以同一个 cwd + 配置目录每次调用都得到
+// 同一个 ns。用于 $RWEG_NS 未设置时的降级路径：裸调用的 read → edit 因此必然
+// 落在同一个 namespace 上，链路才通。
+//
+// 代价与 New 相反：同目录的不同终端会共用 served 状态（隔离性减弱）。
+// 要隔离就 source env.sh，或手动 export RWEG_NS。
+func Degraded(scope string) string {
+	return New(scope, time.Unix(epoch, 0))
+}
+
+// DegradedFor 按当前 cwd + 配置目录生成确定性 ns。
+func DegradedFor(cwd, cfgDir string) string {
+	return Degraded(cwd + "|" + cfgDir)
 }
 
 // encode 把 uint64 编成定长 base62 串。
@@ -121,16 +144,16 @@ func FromEnv() (string, bool) {
 //  1. $RWEG_NS 已设置 → 直接用（支持手动固定，实现多终端共享 served）
 //  2. 未设置 → 按 cwd + 配置目录派生一个**确定性** ns
 //
-// 降级语义（plan §4.4）：派生 ns 是 cwd 的函数，同一个终端里反复调用得到同一个 ns，
-// 所以「read → edit」链路仍然通。不像「每进程一个随机 ns」那样让 edit 永远查不到 served。
-// 代价是隔离性变弱：不同终端在同目录会共用 served 状态。
+// 降级路径派生出的是**确定性** ns（DegradedFor）：只由 cwd + 配置目录决定，
+// 与调用时刻无关。裸调用的「read → edit」因此必然落在同一个 namespace 上，
+// 链路才通；代价是隔离性变弱——同目录的不同终端会共用 served 状态。
 //
 // 第三个返回值是提示语（可能为空），用于 stderr 的一次性 WARN。
 func Resolve(cwd, cfgDir string) (ns string, degraded bool, warn string) {
 	if v, ok := FromEnv(); ok {
 		return v, false, ""
 	}
-	return NewFor(cwd, cfgDir), true,
+	return DegradedFor(cwd, cfgDir), true,
 		"[WARN] " + EnvVar + " unset — served-state isolation disabled (cwd-derived ns).\n" +
 			"       Run: source $RWEG_HOME/scripts/env.sh"
 }

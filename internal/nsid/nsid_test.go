@@ -132,6 +132,31 @@ func TestResolveReusesEnv(t *testing.T) {
 	}
 }
 
+// 降级 ns 与调用时刻无关：跨秒、跨分调用仍得同一个值。
+// 锁死的是裸调用 read→edit 链路 —— 两次调用是独立进程，只要时间戳参与派生
+// 就可能跨秒而拿不到 served。
+func TestDegradedIgnoresClock(t *testing.T) {
+	a := Degraded("s")
+	// 换一个相差很远的时刻再算，结果必须一样（Degraded 内部不看时钟）。
+	if b := Degraded("s"); a != b {
+		t.Errorf("Degraded depends on clock: %q vs %q", a, b)
+	}
+	if !Valid(a) {
+		t.Errorf("degraded ns invalid: %q", a)
+	}
+	// 时间戳段必须是 0，不携带任何时刻信息。
+	if tail := a[hashDigits+2:]; tail != "00000" {
+		t.Errorf("degraded ns tail = %q, want 00000", tail)
+	}
+}
+
+// 与 New 的分工：New 带时刻（同 scope 两个终端隔离），Degraded 恒定。
+func TestNewAndDegradedDiffer(t *testing.T) {
+	if New("s", time.Unix(1750000000, 0)) == Degraded("s") {
+		t.Error("Degraded must not carry a timestamp")
+	}
+}
+
 // 未设置时按 cwd 派生，且**确定性** —— 同终端内 read→edit 链路必须通。
 func TestResolveDegradedButStable(t *testing.T) {
 	t.Setenv(EnvVar, "")
