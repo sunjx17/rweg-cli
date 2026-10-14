@@ -22,6 +22,8 @@ type readArgs struct {
 	specs    []string
 	encoding string
 	noServe  bool
+	// noAnchor 为真表示用了 -fn：输出不带行锚，也不计算 / 记录任何锚点。
+	noAnchor bool
 }
 
 // parseReadArgs 解析 read 的参数。
@@ -37,8 +39,13 @@ type readArgs struct {
 // 解析成功就是范围，失败才当 flag 报错。
 func parseReadArgs(args []string) (*readArgs, error) {
 	a := &readArgs{}
+	// -fn FILE：等价 -f FILE，但输出不带行锚（也不生成锚点）。
+	if f, rest, ok := stripNoAnchor(args); ok {
+		a.file, a.noAnchor, args = config.ResolvePath(f), true, rest
+	}
 	// 简写：read FILE [RANGE ...]
-	if f, rest, ok := fileShorthand(args); ok {
+	// -fn 已经把文件名吃掉，剩下的第一个位置参数是 RANGE，不能再当简写文件。
+	if f, rest, ok := fileShorthand(args); ok && !a.noAnchor {
 		a.file, args = config.ResolvePath(f), rest
 	}
 	for i := 0; i < len(args); i++ {
@@ -123,6 +130,15 @@ func runRead(c *Ctx, args []string) error {
 	merged, err := ranges.Normalize(raw, lineCount)
 	if err != nil {
 		return bizRangeError(err, a.file, lineCount)
+	}
+
+	// -fn：只要内容，不锚定 —— 不算锚点、不写 served、不输出行锚。
+	if a.noAnchor {
+		if c.JSON {
+			return emitReadJSON(os.Stdout, doc, merged, nil)
+		}
+		emitReadPlain(os.Stdout, doc, merged, c.Quiet)
+		return nil
 	}
 
 	anchors, err := anchorsFor(c, doc)
@@ -218,6 +234,28 @@ func emitReadText(w io.Writer, doc *docfile.Doc, blocks []ranges.Range, anchors 
 	io.WriteString(w, b.String())
 }
 
+// emitReadPlain 渲染 -fn 形态的 read：与 emitReadText 同结构，但没有行锚。
+//
+// 超长行不再需要 `~~~` 占位 —— 没有锚点要占位。
+func emitReadPlain(w io.Writer, doc *docfile.Doc, blocks []ranges.Range, quiet bool) {
+	var b strings.Builder
+
+	if !quiet {
+		b.WriteString("# " + displayPath(doc.Path))
+		b.WriteString(" (" + formatLineCount(doc) + ")")
+		b.WriteString("\n")
+	}
+
+	for _, r := range blocks {
+		fmt.Fprintf(&b, "%s:%s:\n", strconv.Itoa(r.Start), strconv.Itoa(r.End))
+		for line := r.Start; line <= r.End; line++ {
+			b.WriteString(doc.Lines[line-1])
+			b.WriteString("\n")
+		}
+	}
+	io.WriteString(w, b.String())
+}
+
 // formatLineCount 渲染行数与文件特征，例 "6 lines, lf, bom"。
 func formatLineCount(doc *docfile.Doc) string {
 	parts := []string{fmt.Sprintf("%d line", doc.LineCount())}
@@ -264,6 +302,9 @@ type readJSONBlock struct {
 	Start int      `json:"start"`
 	End   int      `json:"end"`
 	Lines []string `json:"lines"`
+	// Content 只在 -fn 形态下出现：这时 lines 全为空串（没有锚点），
+	// 内容另放这里，纯内容消费者读它就行。
+	Content []string `json:"content,omitempty"`
 }
 
 func emitReadJSON(w io.Writer, doc *docfile.Doc, blocks []ranges.Range, anchors []string) error {
@@ -280,6 +321,11 @@ func emitReadJSON(w io.Writer, doc *docfile.Doc, blocks []ranges.Range, anchors 
 	for _, r := range blocks {
 		blk := readJSONBlock{Start: r.Start, End: r.End}
 		for line := r.Start; line <= r.End; line++ {
+			if len(anchors) == 0 {
+				// -fn：没有锚点，内容单独放 content
+				blk.Content = append(blk.Content, doc.Lines[line-1])
+				continue
+			}
 			if doc.HasLongLine(line) {
 				// 超长行：内容照给，锚点留空表示"不可用于 edit"
 				blk.Lines = append(blk.Lines, "")

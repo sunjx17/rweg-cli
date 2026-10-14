@@ -247,6 +247,13 @@ func parseGrepArgs(args []string) *grepArgs {
 //  3. 正常，rg 退出码 0            → 解析 --json，转锚点格式并 serve 命中行
 //  4. 其他退出码                   → 视为 rg 报错，回退默认行为
 func runGrep(args []string) error {
+	// -fn FILE：把 FILE 放到位置参数末尾，输出不带行锚（也不生成锚点）。
+	noAnchor := false
+	if f, rest, ok := stripNoAnchor(args); ok {
+		noAnchor = true
+		args = append(rest, f)
+	}
+
 	res, err := config.Load()
 	if err != nil {
 		return &Error{Code: ExitUsage, Message: err.Error(),
@@ -314,6 +321,12 @@ func runGrep(args []string) error {
 
 	// 只有在确实有命中行要锚定时才开库 —— 这条路径开销最大，
 	// 前面所有回退分支都不该被它拖累（也避免无谓地建库）。
+	// -fn 不锚定任何行：连开库都不必，锚点空间不该被没有锚点的调用占住。
+	if noAnchor {
+		emitGrepPlain(os.Stdout, files, res.Cwd)
+		return nil
+	}
+
 	c, err := openWith(ToolGrep, flagSet{json: a.json})
 	if err != nil {
 		return err
@@ -421,6 +434,25 @@ func parseRJSON(data []byte) ([]hitFile, error) {
 }
 
 // --- 输出 ---
+
+// emitGrepPlain 渲染 -fn 形态的 grep：分组头 + `行号:内容`，不带行锚。
+//
+// 结构与 emitGrepAnchored 保持一致，只是去掉了 `锚点│` 那一段。
+func emitGrepPlain(w io.Writer, files []hitFile, cwd string) {
+	var b strings.Builder
+	first := true
+	for _, f := range files {
+		if !first {
+			b.WriteString("\n")
+		}
+		first = false
+		fmt.Fprintf(&b, "# %s (%s)\n", displayPath(absPath(f.Path, cwd)), matchCount(f.Hits))
+		for _, h := range f.Hits {
+			fmt.Fprintf(&b, "%d:%s\n", h.Line, h.Text)
+		}
+	}
+	io.WriteString(w, b.String())
+}
 
 // emitGrepAnchored 给每个命中行加锚点，并把命中行写入 served。
 func emitGrepAnchored(w io.Writer, c *Ctx, files []hitFile) error {

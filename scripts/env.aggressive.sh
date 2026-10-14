@@ -6,7 +6,7 @@
 #   read / write / edit / grep 
 #       同名函数覆盖 —— read 压过 bash 内置，grep 压过系统 grep。
 #       read 只在下列情形归 rweg：出现 rweg 独有 flag（-f / --file / --json /
-#       --no-serve / --encoding / --quiet / -h）；零参数；或简写
+#       --no-serve / --no-anchor / --encoding / --quiet / -h）；零参数；或简写
 #       `read FILE [RANGE ...]`（首参是存在的文件，且其后全是范围写法）。
 #       其余（read line、read -r line、read -p ...）交还 builtin read，
 #       并带 RWEG_READ_TIMEOUT（缺省 5 秒）有界等待。
@@ -29,7 +29,7 @@ read() {
 	# 零参数：交给 rweg。它会明确报"缺文件"，而不是像 builtin read 那样
 	# 在交互式终端上干等一行输入，把 agent 卡死。
 	if [ "$#" -eq 0 ]; then
-		hread
+		"$_rweg_core" read
 		return $?
 	fi
 
@@ -37,8 +37,8 @@ read() {
 	for _a in "$@"; do
 		case "$_a" in
 			# rweg 自己的 flag：整体交给 rweg
-			-f | --file | --file=* | -h | --help | --json | --no-serve | --encoding | --encoding=* | --quiet)
-				hread "$@"
+			-f | --file | --file=* | -fn | --no-anchor | --no-anchor=* | -h | --help | --json | --no-serve | --encoding | --encoding=* | --quiet)
+				"$_rweg_core" read "$@"
 				return $?
 				;;
 		esac
@@ -57,7 +57,7 @@ read() {
 			esac
 		done
 		if [ "$_ranges" = 1 ]; then
-			hread "$@"
+			"$_rweg_core" read "$@"
 			return $?
 		fi
 	fi
@@ -87,9 +87,9 @@ read() {
 	fi
 	return "$_rc"
 }
-write()     { hwrite "$@"; }
-edit()      { hedit  "$@"; }
-grep()      { hgrep  "$@"; }
+write()     { "$_rweg_core" write "$@"; }
+edit()      { "$_rweg_core" edit  "$@"; }
+grep()      { "$_rweg_core" grep  "$@"; }
 # --- cd：只提示，不改行为（且不 export -f）---
 cd(){
 	# cd 包装只给交互提示：**不 export -f**（原因见下面的 export 段），

@@ -757,6 +757,29 @@ check "grep --encoding 仍是编码" "1" \
     "$(rsh "$_sb" grep -c --encoding utf-8 foo e.txt 2>/dev/null)"
 
 # ─────────────────────────────────────────────────────────────
+section R "无锚形态 -fn"
+# ─────────────────────────────────────────────────────────────
+new_sandbox
+printf 'aa\nbb\ncc\n' > "$_sb/n.txt"
+
+_out="$(rsh "$_sb" read -fn n.txt)"
+check "read -fn 块头仍在" "1:3:" "$(printf '%s' "$_out" | sed -n 2p)"
+check "read -fn 只给内容（无行锚）" "aa bb cc" "$(printf '%s' "$_out" | tail -n +3 | tr '\n' ' ')"
+case "$_out" in
+*│*) bad "read -fn 不该出行锚分隔符" "$_out" ;;
+*) ok "read -fn 不出行锚分隔符" ;;
+esac
+
+check "write -fn 只回一行确认" "created w.txt (2 lines)" \
+    "$(rsh "$_sb" write -fn w.txt -c $'x\ny')"
+check "write -fn 确实落盘" "x
+y" "$(cat "$_sb/w.txt")"
+
+check "grep -fn 只给行号与内容" "# n.txt (1 match)
+2:bb" "$(rsh "$_sb" grep -n -fn n.txt bb)"
+
+contains "read -f 仍出行锚" "$SEP" "$(rsh "$_sb" read -f n.txt 2>/dev/null | tail -1)"
+
 section P "路径形态与读取上限"
 # ─────────────────────────────────────────────────────────────
 new_sandbox

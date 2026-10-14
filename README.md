@@ -110,6 +110,30 @@ $ unset RWEG_PIN_CONFIG                      # 回到"每次按 cwd 现找"
 
 七个工具与 `core-rweg` 及其子命令皆认 `-h` / `--help` / `help`：`read -h`、`grep -h`、`core-rweg cfg -h` 打的都是 rweg 自己的用法（`grep -h` 不再落到 ripgrep 的手册）。下文用接管后的短名 `read` / `write` / `edit` / `grep` / `undo` / `append` / `prepend`；非侵入模式下前四个写作 `hread` / `hwrite` / `hedit` / `hgrep`，后三个同名，参数与输出完全一致。给 Agent 的完整约定：`core-rweg prompt`。
 
+### 无锚形态 `-fn`
+
+`read` / `write` / `grep` 另认 `-fn FILE`（长写法 `--no-anchor FILE` / `--no-anchor=FILE`），
+与 `-f FILE` 等价，区别是**完全不产生锚点**：
+
+```bash
+$ read -fn src/app.ts 1:2      # 只有内容，没有「锚点│」前缀
+# src/app.ts (6 lines, lf)
+1:2:
+function hello() {
+  console.log("world");
+
+$ grep -n -fn src/app.ts hello  # 只有「行号:内容」
+# src/app.ts (1 match)
+1:function hello() {
+
+$ write -fn src/new.ts -c "x"  # 成功只回一行，不回显内容
+created src/new.ts (1 line)
+```
+
+不带行锚的行**不进 served**，也就不能直接拿去 `edit`；只是想看内容、或要把结果接进管道时用它。
+`edit` / `undo` / `append` / `prepend` 不认这个 flag —— 它们必须拿锚点干活。
+`--json` 下 `read` 的每块多一个 `content` 数组（`lines` 为空），`write` 不输出 `hashes`。
+
 ### `read` —— 取锚
 
 ```

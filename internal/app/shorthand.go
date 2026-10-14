@@ -25,3 +25,34 @@ func fileShorthand(args []string) (file string, rest []string, ok bool) {
 	}
 	return args[0], args[1:], true
 }
+
+// stripNoAnchor 摘掉 rweg 自己的无锚文件 flag（-fn / --no-anchor）及其值。
+//
+// `-fn FILE`（长写法 `--no-anchor FILE` / `--no-anchor=FILE`）是
+// `-f FILE` 的等价写法，区别只在输出：内容不带行锚，也就没有锚点可生成
+// —— 适合只想拿纯内容（脚本、管道、只看一眼）的场景。
+//
+// 返回值：file 为 -fn 给出的路径（没写则空），rest 是摘掉该 flag 后的参数。
+func stripNoAnchor(args []string) (file string, rest []string, ok bool) {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		s := args[i]
+		switch {
+		case (s == "-fn" || s == "--no-anchor") && ok == false:
+			if i+1 >= len(args) {
+				// 没给值：原样留着，由各工具的参数解析报用法错误
+				out = append(out, s)
+				continue
+			}
+			i++
+			file, ok = args[i], true
+		case ok && s == "--no-anchor" && strings.HasPrefix(s, "--no-anchor="):
+			out = append(out, s)
+		case !ok && strings.HasPrefix(s, "--no-anchor="):
+			file, ok = s[len("--no-anchor="):], true
+		default:
+			out = append(out, s)
+		}
+	}
+	return file, out, ok
+}

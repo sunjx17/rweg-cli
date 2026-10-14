@@ -70,6 +70,11 @@ FILE 放在最前面就能省掉 -f。要把 flag 写在文件名前面（read -
 时改用 -f FILE 形式，两者等价；旧写法 read -f FILE / write -f FILE -c CONTENT /
 edit -f FILE -c FROM:TO CONTENT 照旧可用。
 
+read / write / grep 还接受 -fn FILE（长写法 --no-anchor FILE / --no-anchor=FILE），
+它与 -f 等价，区别是**完全不产生锚点**：read 只给内容（每行没有「锚点│」前缀），
+write 成功时只回一行确认、不回显内容，grep 只给「行号:内容」。只想看内容、或要把
+结果接进管道时用它；这些行不记入 served，也就不能直接拿去 edit。
+
 帮助：read -h / write -h / edit -h / grep -h / undo -h / append -h / prepend -h /
 core-rweg -h。
 

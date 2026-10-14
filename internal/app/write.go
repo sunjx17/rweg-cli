@@ -20,6 +20,8 @@ type writeArgs struct {
 	content    string
 	hasContent bool
 	encoding   string
+	// noAnchor 为真表示用了 -fn：成功时只回一句确认，不生成 / 不记录锚点。
+	noAnchor bool
 }
 
 // parseWriteArgs 解析 write 的参数。
@@ -31,9 +33,14 @@ type writeArgs struct {
 // `content != ""` 来判断，否则空文件这个用例永远表达不出来。
 func parseWriteArgs(args []string) (*writeArgs, error) {
 	a := &writeArgs{}
+	// -fn FILE：等价 -f FILE，但成功时不回显内容、不生成锚点。
+	if f, rest, ok := stripNoAnchor(args); ok {
+		a.file, a.noAnchor, args = config.ResolvePath(f), true, rest
+	}
 	// 简写：write FILE [CONTENT]
 	shorthand := false
-	if f, rest, ok := fileShorthand(args); ok {
+	// -fn 已经把文件名吃掉，剩下的位置参数不该再被简写形态当成文件。
+	if f, rest, ok := fileShorthand(args); ok && !a.noAnchor {
 		a.file, args, shorthand = config.ResolvePath(f), rest, true
 	}
 	for i := 0; i < len(args); i++ {
@@ -175,11 +182,15 @@ func runWrite(c *Ctx, args []string) error {
 	}
 
 	stride := c.Res.Cfg.Hash.ProbeStride
-	reserved, err := c.DB.RetiredFor(abs)
-	if err != nil {
-		return &Error{Code: ExitInternal, Message: "write: " + err.Error()}
+	// -fn：不算锚点、也不 serve —— 没有锚点发出去，就不该占住锚点空间。
+	var anchors []string
+	if !a.noAnchor {
+		reserved, err := c.DB.RetiredFor(abs)
+		if err != nil {
+			return &Error{Code: ExitInternal, Message: "write: " + err.Error()}
+		}
+		anchors = hashline.Pure(doc.Lines, stride, reserved)
 	}
-	anchors := hashline.Pure(doc.Lines, stride, reserved)
 
 	pre, preTooBig, preErr := preImage(abs, existed)
 	if preErr != nil {
@@ -194,6 +205,22 @@ func runWrite(c *Ctx, args []string) error {
 		return &Error{Code: ExitBiz, Message: "E_WRITE  " + displayPath(a.file) + ": " + err.Error()}
 	}
 	recordUndo(c, abs, existed, "write", pre, preTooBig)
+
+	if a.noAnchor {
+		// 只回成功信息：不 serve、不回填快照、不输出内容与锚点。
+		// 旧指纹的快照仍要清掉（内容已整体换过，缓存留着只会误导）。
+		if existed {
+			fp := store.ContentFingerprint(doc.Lines)
+			if err := c.DB.PruneSnapshotsExcept(abs, fp); err != nil {
+				return &Error{Code: ExitInternal, Message: "write: prune snapshots: " + err.Error()}
+			}
+		}
+		if c.JSON {
+			return emitWriteJSON(os.Stdout, doc, nil, existed)
+		}
+		emitWritePlain(os.Stdout, doc, existed)
+		return nil
+	}
 
 	// 全文 serve + 回填快照；旧指纹的快照顺手清掉（内容已整体换过）。
 	canonVer := c.Res.Cfg.Hash.CanonVersion
@@ -254,16 +281,37 @@ func emitWriteText(w io.Writer, doc *docfile.Doc, anchors []string, existed, qui
 	io.WriteString(w, b.String())
 }
 
+// emitWritePlain 渲染 -fn 形态的 write 结果：只有一行成功信息。
+//
+// 故意不回显内容也不给锚点 —— 用 -fn 就是不想要这些。
+func emitWritePlain(w io.Writer, doc *docfile.Doc, existed bool) {
+	verb := "created"
+	if existed {
+		verb = "replaced"
+	}
+	n := len(doc.Lines)
+	if n == 0 {
+		fmt.Fprintf(w, "%s %s (empty)\n", verb, displayPath(doc.Path))
+		return
+	}
+	unit := "lines"
+	if n == 1 {
+		unit = "line"
+	}
+	fmt.Fprintf(w, "%s %s (%d %s)\n", verb, displayPath(doc.Path), n, unit)
+}
+
 type writeJSON struct {
 	Path      string            `json:"path"`
 	Created   bool              `json:"created"`
 	LineCount int               `json:"line_count"`
 	Newline   string            `json:"newline"`
 	Encoding  string            `json:"encoding"`
-	Hashes    []string          `json:"hashes"`
+	Hashes    []string          `json:"hashes,omitempty"`
 	Meta      map[string]string `json:"meta,omitempty"`
 }
 
+// emitWriteJSON 输出结构化结果。anchors 为空（-fn）时 hashes 不输出。
 func emitWriteJSON(w io.Writer, doc *docfile.Doc, anchors []string, existed bool) error {
 	out := writeJSON{
 		Path:      doc.Path,
@@ -271,7 +319,9 @@ func emitWriteJSON(w io.Writer, doc *docfile.Doc, anchors []string, existed bool
 		LineCount: len(doc.Lines),
 		Newline:   doc.Newline,
 		Encoding:  doc.Encoding,
-		Hashes:    anchors,
+	}
+	if len(anchors) > 0 {
+		out.Hashes = anchors
 	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")

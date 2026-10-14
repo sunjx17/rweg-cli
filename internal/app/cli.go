@@ -198,6 +198,8 @@ RANGE := N            单行
 不给 RANGE 时默认读整个文件（超过 max_lines 截断并标 truncated；单行超过
 max_line_bytes 的行只给标记，不给锚点）。
 输出每行 ` + hashline.Sep + `内容。读到的行记入 served，锚点可直接用于 edit。
+-fn FILE（等价 --no-anchor FILE）只要内容：结构相同但不带行锚，也不生成锚点，
+读到的行不进 served（不能直接拿去 edit）。
 绝对路径两种形态都认：C:/x/f.txt 与 /c/x/f.txt，MSYS 的 /tmp 也认。
 `
 	case ToolWrte:
@@ -214,6 +216,8 @@ FILE 放在最前面时可以省掉 -f，CONTENT 就是紧随其后的那个位�
 文件不存在则创建（目录必须已存在）；存在则全量替换。
 写完自动 serve 全文并回传锚点，省一次 read；这一步的内容进撤销栈，
 改错了可以 undo 退回来。
+-fn FILE（等价 --no-anchor FILE）成功时只回一行 "created/replaced 路径 (N lines)"，
+不回显内容、不生成锚点。
 `
 	case ToolEdit:
 		return `edit [FILE] FROM[:TO] CONTENT [FROM[:TO] CONTENT ...]
@@ -246,6 +250,8 @@ t.txt (2 → 3 lines, +1)
 `
 	case ToolGrep:
 		return `grep [rg 的参数]... [--] 路径
+
+-fn FILE（等价 --no-anchor FILE）只给「行号:内容」，不带锚点也不写入 served。
 
 命中行会带上锚点并把行写入 served，可直接用于 edit：
 

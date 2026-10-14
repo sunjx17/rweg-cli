@@ -6,6 +6,12 @@
 
 ### 行为
 
+- **`read` / `write` / `grep` 新增无锚形态 `-fn FILE`**（长写法 `--no-anchor FILE`
+  / `--no-anchor=FILE`）。它与 `-f FILE` 等价，但完全不产生锚点：`read` 只回内容
+  （每行没有「锚点│」前缀），`write` 成功时只回一行 created/replaced 确认、
+  不回显内容，`grep` 只回「行号:内容」。这些行不进 served，不能直接拿去 `edit`。
+  `--json` 下 `read` 的每块多一个 `content` 数组、`write` 不再输出 `hashes`。
+
 - **未 `source env.sh` 时的降级 ns 改为确定性派生**：后 5 位固定为 `00000`，
   不再带创建时刻。同一个 `cwd|配置目录` 无论调用多少次都得到同一个 ns，
   裸调用的 `read` → `edit` 必然落在同一个 namespace 上；此前带秒级时间戳，

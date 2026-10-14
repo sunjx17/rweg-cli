@@ -1,8 +1,14 @@
 package app
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"rweg/internal/docfile"
+	"rweg/internal/hashline"
+	"rweg/internal/ranges"
 )
 
 // 简写形态：第一个位置参数就是文件（read FILE / write FILE CONTENT /
@@ -128,4 +134,132 @@ func TestParseUndoArgs(t *testing.T) {
 	if _, err := parseUndoArgs([]string{"--nope"}); err == nil {
 		t.Error("未知 flag 应当报错")
 	}
+}
+
+// -fn / --no-anchor：从参数里摘掉文件路径，其余原样保留。
+func TestStripNoAnchor(t *testing.T) {
+	cases := []struct {
+		name     string
+		args     string
+		wantFile string
+		wantRest string
+		wantOK   bool
+	}{
+		{"-fn 简写", "-fn src/app.ts 1:3", "src/app.ts", "1:3", true},
+		{"长写法带空格", "--no-anchor src/app.ts", "src/app.ts", "", true},
+		{"长写法带 =", "--no-anchor=src/app.ts 1:3", "src/app.ts", "1:3", true},
+		{"flag 在前", "-n pat -fn src/app.ts", "src/app.ts", "-n pat", true},
+		{"没有 -fn", "-f src/app.ts 1:3", "", "-f src/app.ts 1:3", false},
+		{"缺值时留给调用方报错", "-fn", "", "-fn", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			file, rest, ok := stripNoAnchor(strings.Fields(tc.args))
+			if ok != tc.wantOK || file != tc.wantFile {
+				t.Fatalf("ok=%v file=%q, want ok=%v file=%q", ok, file, tc.wantOK, tc.wantFile)
+			}
+			if tc.wantOK {
+				if got := strings.Join(rest, " "); got != tc.wantRest {
+					t.Errorf("rest = %q, want %q", got, tc.wantRest)
+				}
+			}
+		})
+	}
+}
+
+// -fn 与 -f 等价地解析出文件，并置上 noAnchor。
+func TestParseReadWriteArgsNoAnchor(t *testing.T) {
+	a, err := parseReadArgs([]string{"-fn", "src/app.ts", "1:3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.noAnchor || a.file == "" || len(a.specs) != 1 {
+		t.Fatalf("read: file=%q specs=%v noAnchor=%v", a.file, a.specs, a.noAnchor)
+	}
+	b, err := parseReadArgs([]string{"-f", "src/app.ts", "1:3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.noAnchor || b.file != a.file {
+		t.Fatalf("-f 形态不该被 -fn 影响: file=%q noAnchor=%v", b.file, b.noAnchor)
+	}
+
+	w, err := parseWriteArgs([]string{"-fn", "out.txt", "-c", "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !w.noAnchor || !w.hasContent || w.content != "hello" {
+		t.Fatalf("write: %+v", w)
+	}
+}
+
+// -fn 的 read 输出没有行锚，也没有块头以外的锚点噪声。
+func TestEmitReadPlain(t *testing.T) {
+	doc := &docfile.Doc{
+		Path:     "src/app.ts",
+		Lines:    []string{"function hello() {", "}"},
+		Newline:  docfile.NewlineLF,
+		Encoding: docfile.EncodingUTF8,
+	}
+	var b strings.Builder
+	emitReadPlain(&b, doc, []ranges.Range{{Start: 1, End: 2}}, false)
+	got := b.String()
+	want := "# src/app.ts (2 lines, lf)\n1:2:\nfunction hello() {\n}\n"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if strings.Contains(got, hashline.Sep) {
+		t.Errorf("输出里不该有行锚分隔符: %q", got)
+	}
+}
+
+// -fn 的 write 只回一行成功信息。
+func TestEmitWritePlain(t *testing.T) {
+	doc := &docfile.Doc{Path: "out.txt", Lines: []string{"a", "b"}}
+	var b strings.Builder
+	emitWritePlain(&b, doc, false)
+	if got, want := b.String(), "created out.txt (2 lines)\n"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	b.Reset()
+	emitWritePlain(&b, &docfile.Doc{Path: "out.txt"}, true)
+	if got, want := b.String(), "replaced out.txt (empty)\n"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// -fn 的 grep 输出是 `行号:内容`，没有锚点。
+func TestEmitGrepPlain(t *testing.T) {
+	files := []hitFile{{
+		Path: "src/app.ts",
+		Hits: []hitLine{{Line: 1, Text: "one"}, {Line: 7, Text: "seven"}},
+	}}
+	var b strings.Builder
+	emitGrepPlain(&b, files, tempDir(t))
+	got := b.String()
+	want := "# src/app.ts (2 matches)\n1:one\n7:seven\n"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if strings.Contains(got, hashline.Sep) {
+		t.Errorf("输出里不该有行锚分隔符: %q", got)
+	}
+}
+
+// tempDir 建一个临时目录并 chdir 进去，返回原 cwd（displayPath 才能相对化）。
+func tempDir(t *testing.T) string {
+	t.Helper()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(old) })
+	return dir
 }
