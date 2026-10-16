@@ -186,8 +186,8 @@ echo "  向上找配置：RWEG_WALKUP=2 core-rweg cfg"
 fi
 # --- 额外的自定义项目:
 # --- grep，如果想临时强行接管就取消注释（供调试）
-# grep()      { hgrep  "$@"; }
-# --- cd：只提示，不改行为（且不 export -f）---
+# grep()      { "$_rweg_core" grep  "$@"; }
+# --- cd：只提示，不改行为（且不 export -f）（供调试）---
 
 cd(){
 	# cd 包装只给交互提示：**不 export -f**（原因见下面的 export 段），
@@ -200,7 +200,7 @@ cd(){
 		if [ "$last__cwd" == $(pwd) ]; then
 		{
 			# 给过度谨慎的agent的提示，避免它在shell里重复cd到同一路径（持久shell里没有必要每行都在开头加cd {cwd}，实际观察到agent很喜欢反复cd同一目录包括开发本项目的那位）。默认开启，停用只需注释掉。
-			echo "cd command ERROR: do not 'cd' to same destination more than twice. current cwd is already '$(pwd)." >&2
+			echo "WARN: do not 'cd' to same destination more than twice. current cwd is already '$(pwd)." >&2
 			
 		}
 		else
