@@ -7,8 +7,11 @@
 #     source ~/.rweg/scripts/env.restore.sh --all    # 连 env.sh 那层一起拆
 #
 # 只拆 rweg 自己装的，判据两条同时成立：同名的 h* 函数在（hread / hwrite / …），
-# 且函数体里出现 h* 转发；cd 认它那条 WARN 文案。别的来源的同名函数原样保留，
-# 并在 stderr 说一声是谁占着。`unset -f` 会连带清掉 BASH_FUNC_* 导出，
+# 且函数体里出现 `"$_rweg_core" <工具名>` 转发（aggressive 层各函数的真实形状）；
+# cd 认两条文案之一 —— env.sh 那层的 "WARN: do not 'cd' to same destination"
+# 与 aggressive 那层的 "cd command ERROR: do not call"。
+# 别的来源的同名函数原样保留，并在 stderr 说一声是谁占着。
+# `unset -f` 会连带清掉 BASH_FUNC_* 导出，
 # 所以从那之后起的子进程也回到内置。
 #
 # --all 还会：unset hread / hwrite / hedit / hreplace / hgrep / hundo / happend / hprepend /
@@ -40,6 +43,12 @@ _rweg_kept=""
 
 # --- 1. 接管层（env.aggressive.sh 装的同名命令）：带 rweg 痕迹的才拆 ---
 #      undo / append / prepend 是 env.sh 装的不重名函数，不在这一层，--all 才拆。
+#
+# 判据用**源码形状**（declare -f 打印的就是源码，变量不展开）：
+# `"$_rweg_core"` + `" <工具名>"` 两段同时出现即 rweg 的转发函数。
+# 刻意写成带引号的字面量而非依赖 $_rweg_core 的**值**——
+# 值在 --all 路径里此时还可能为空，空值会让模式退化成 *" read"*，
+# 把任何恰好含 `" read` 的函数误拆。
 for _rweg_fn in read write edit grep; do
 	_rweg_body="$(declare -f "$_rweg_fn" 2>/dev/null)" || continue
 	if ! declare -F "h$_rweg_fn" >/dev/null 2>&1; then
@@ -47,7 +56,7 @@ for _rweg_fn in read write edit grep; do
 		continue
 	fi
 	case "$_rweg_body" in
-		*"h$_rweg_fn"*'"$@"'*) ;;
+		*'"$_rweg_core"'*" $_rweg_fn"*) ;;
 		*) _rweg_kept="$_rweg_kept $_rweg_fn"; continue ;;
 	esac
 	unset -f "$_rweg_fn"
@@ -56,7 +65,7 @@ done
 _rweg_body="$(declare -f cd 2>/dev/null)" || _rweg_body=""
 if [ -n "$_rweg_body" ]; then
 	case "$_rweg_body" in
-		*"cd command ERROR: do not call"* | *"WARN:cd command is not recommended"*)
+		*"cd command ERROR: do not call"* | *"WARN: do not 'cd' to same destination"*)
 			unset -f cd
 			_rweg_dropped="$_rweg_dropped cd"
 			;;
@@ -78,6 +87,8 @@ if [ "$_rweg_all" = 1 ]; then
 		export PATH
 	fi
 	unset RWEG_NS RWEG_PIN_CONFIG RWEG_HOME RWEG_BIN _rweg_core
+	# cd 包装用过的全局（local 化之前的旧包装会留它；顺手清，回到"从未 source 过"）。
+	unset last__cwd
 fi
 
 if [ -n "$_rweg_kept" ]; then

@@ -94,21 +94,21 @@ grep()      { "$_rweg_core" grep  "$@"; }
 cd(){
 	# cd 包装只给交互提示：**不 export -f**（原因见下面的 export 段），
 	# 且一律走 stderr —— stdout 会被 $(cd ... && pwd) 这类命令替换收走。
+	# 退出码与内置 cd 一致；行为差异只有提示。
+	# ⚠️ "cd command ERROR: do not call" 是本层的判识痕迹：
+	# env.restore.sh 靠它认领这层并 unset -f cd。改文案要同步 env.restore.sh。
 	echo "WARNING:cd command is not recommended in this shell." >&2 # 给不太聪明的agent的提示，避免它在shell里过度cd；aggressive默认开启。
-	last__cwd=$(pwd)
-	builtin cd "$@"
-	if [ $? -eq 0 ]; then
-	{
-		if [ "$last__cwd" == $(pwd) ]; then
-		{
-			# 给过度谨慎的agent的提示，避免它在shell里重复cd到同一路径（持久shell里没有必要每行都在开头加cd {cwd}）。默认开启，停用只需注释掉。
-			echo "cd command ERROR: do not call 'cd $(pwd)' command more than twice." >&2
-		}
-		else
-			# 给agent的提示，同样避免它在shell里重复cd到同一路径。默认开启，停用只需注释掉。
-			echo "cd: cwd changed to '$(pwd)'" >&2
-		fi
-	}
+	local last__cwd
+	last__cwd="$(pwd)"
+	if ! builtin cd "$@"; then
+		return $?
+	fi
+	if [ "$last__cwd" = "$(pwd)" ]; then
+		# 给过度谨慎的agent的提示，避免它在shell里重复cd到同一路径（持久shell里没有必要每行都在开头加cd {cwd}）。默认开启，停用只需注释掉。
+		echo "cd command ERROR: do not call 'cd $(pwd)' command more than twice." >&2
+	else
+		# 给agent的提示，同样避免它在shell里重复cd到同一路径。默认开启，停用只需注释掉。
+		echo "cd: cwd changed to '$(pwd)'" >&2
 	fi
 }
 

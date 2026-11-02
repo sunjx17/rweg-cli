@@ -13,7 +13,8 @@
 #
 # 工具是 core-rweg 的子命令（bin 里只有这一个二进制），本层给 h 前缀别名：
 #     hread / hwrite / hedit / hreplace / hgrep / hundo / happend / hprepend / hundo_last_edit
-# read / write / edit / grep / undo 与 bash 原生 cd **一个都不动**。
+# read / write / edit / grep / undo **一个都不动**；cd 只包一层提示（见文末：
+# 不 export，行为与内置一致，env.restore.sh 认得这层并负责拆掉）。
 #
 # 幂等：同一终端重复 source 不产生第二个 ns、PATH 不堆积。
 # 可在任意目录 source：配置与数据库跟随 cwd 自动切换。
@@ -181,7 +182,7 @@ unset _rweg_src _rweg_dir _rweg_home_posix _rweg_home_native
 if [ -n "${RWEG_VERBOSE:-}" ] && [ "${RWEG_VERBOSE}" != "0" ]; then
 	{
 		echo "rweg ready (home=$RWEG_HOME, ns=${RWEG_NS:-<cwd-derived>}, walkup=${RWEG_WALKUP:-0})"
-		echo "  h* 工具hread / hwrite / hedit / hreplace / hgrep +  append / prepend / undo / undo_last_edit 就绪" # 后面四个就不写h*了，但也可以用
+		echo "  h* 工具 hread / hwrite / hedit / hreplace / hgrep +  append / prepend / undo / undo_last_edit 就绪" # 后面四个就不写h*了，但也可以用
 		echo "  要同名接管（read/write/edit/grep）：source env.aggressive.sh"
 		echo "  诊断：core-rweg cfg | core-rweg doctor；Agent 提示词：core-rweg prompt"
 		echo "  配置钉住：${RWEG_PIN_CONFIG:-<无，按 cwd 现找>}"
@@ -193,24 +194,27 @@ fi
 # grep()      { "$_rweg_core" grep  "$@"; }
 # --- cd：只提示，不改行为（且不 export -f）（供调试）---
 
+# --- cd：只提示，不改行为（刻意不 export -f）---
+#
+# 给持久终端里 agent 的提示：不必每行都重复 cd 到同一目录。行为与内置 cd
+# 完全一致（退出码原样透传），提示一律走 stderr —— stdout 会被
+# $(cd ... && pwd) 这类命令替换收走，所以**不 export -f**：导出后每个子
+# 脚本都会继承它，命令替换的结果就被警告文本污染了。
+#
+# ⚠️ "WARN: do not 'cd' to same destination" 是本层的判识痕迹：
+# env.restore.sh 靠它认领这层并 unset -f cd。改文案要同步 env.restore.sh。
+# echo "WARNING:cd command is not recommended in this shell." >&2 # 给不太聪明的agent的提示，避免它在shell里过度cd；默认关闭，启用可取消注释。
 cd(){
-	# cd 包装只给交互提示：**不 export -f**（原因见下面的 export 段），
-	# 且一律走 stderr —— stdout 会被 $(cd ... && pwd) 这类命令替换收走。
-	# echo "WARNING:cd command is not recommended in this shell." >&2 # 给不太聪明的agent的提示，避免它在shell里过度cd；默认关闭，启用可取消注释。
-	last__cwd=$(pwd)
-	builtin cd "$@"
-	if [ $? -eq 0 ]; then
-	{
-		if [ "$last__cwd" == $(pwd) ]; then
-		{
-			# 给过度谨慎的agent的提示，避免它在shell里重复cd到同一路径（持久shell里没有必要每行都在开头加cd {cwd}，实际观察到agent很喜欢反复cd同一目录包括开发本项目的那位）。默认开启，停用只需注释掉。
-			echo "WARN: do not 'cd' to same destination more than twice. current cwd is already '$(pwd)." >&2
-			
-		}
-		else
-			# 给agent的提示，同样避免它在shell里重复cd到同一路径。默认开启，停用只需注释掉。
-			echo "cd: cwd changed to '$(pwd)'" >&2
-		fi
-	}
+	local last__cwd
+	last__cwd="$(pwd)"
+	if ! builtin cd "$@"; then
+		return $?
+	fi
+	if [ "$last__cwd" = "$(pwd)" ]; then
+		# 给过度谨慎的agent的提示，避免它在shell里重复cd到同一路径（持久shell里没有必要每行都在开头加cd {cwd}，实际观察到agent很喜欢反复cd同一目录包括开发本项目的那位）。默认开启，停用只需注释掉。
+		echo "WARN: do not 'cd' to same destination more than twice. current cwd is already '$(pwd)'" >&2
+	else
+		# 给agent的提示，同样避免它在shell里重复cd到同一路径。默认开启，停用只需注释掉。
+		echo "cd: cwd changed to '$(pwd)'" >&2
 	fi
 }

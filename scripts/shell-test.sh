@@ -412,6 +412,81 @@ check "grep 无匹配 → 1（退出码透传）" "1" "$?"
 rsh grep -q hello app.ts 2>/dev/null
 check "grep 有匹配 → 0（退出码透传）" "0" "$?"
 
+# ── 9. env.restore.sh：反注册 ──
+echo
+echo "[9] env.restore.sh 反注册"
+# restore 必须能拆掉它自己装的每一层：接管层的 read / grep / cd、env.sh 那层的
+# cd 提示包装、--all 的 h* / PATH / ns。
+# ⚠️ cd **刻意不 export**（见 env.sh / env.aggressive.sh 的注释），所以在
+# `bash -c` 子进程里它本来就是 builtin —— 断言必须在 source 的**同一个** shell
+# 里做，用 rsh / rshp 直接跑（它们就是那个 shell），或手动展开同一形态。
+_restore="$_home/scripts/env.restore.sh"
+rsx() { # rsx <restore 参数串（"" = 无）> <命令...> —— source 接管层 + restore 后跑命令
+	local ra="${1:-}"
+	shift
+	(
+		cd "$sandbox" || exit 1
+		. "$_env" >/dev/null 2>&1
+		# ⚠️ source 不带参数时会继承当前（函数）的位置参数 —— restore 会把
+		# probe_rw 之类当自己的参数报"未知参数"。空参时显式给一个 ""。
+		if [ -n "$ra" ]; then . "$_restore" "$ra" >/dev/null 2>&1; else . "$_restore" "" >/dev/null 2>&1; fi
+		"$@"
+	)
+}
+# 探针必须是**函数**：写成 `rsx "" printf ... "$(type -t read)"` 的话，
+# 命令替换在外层（没 source 过的）shell 里就展开了，量到的是外层状态。
+probe_rw() {
+	printf '%s/%s/%s/%s' "$(type -t read 2>/dev/null)" "$(type -t grep 2>/dev/null)" \
+		"$(type -t cd 2>/dev/null)" "$(type -t hread 2>/dev/null)"
+}
+probe_all() {
+	printf '%s/%s/%s/%s' "$(type -t hread 2>/dev/null || echo none)" \
+		"$(type -t core-rweg 2>/dev/null || echo none)" \
+		"${RWEG_NS:-unset}" "${RWEG_PIN_CONFIG:-unset}"
+}
+
+out="$(rsh bash -c 'type -t read; type -t grep')"
+check "restore 前 read/grep 是函数（export 到子进程）" "function
+function" "$out"
+out="$(rsh type -t cd)"
+check "restore 前 cd 是函数（仅本 shell）" "function" "$out"
+
+# 接管层拆掉：read 回 builtin、grep 回 PATH、cd 回 builtin；h* 那层（非 --all）保留
+out="$(rsx "" probe_rw)"
+check "restore 后 read/grep/cd 归位、hread 保留" "builtin/file/builtin/function" "$out"
+
+# env.sh 那层的 cd 提示包装（"WARN: do not 'cd' to same destination"）也要认得
+out="$(rshp type -t cd)"
+check "env.sh 装了 cd 提示包装" "function" "$out"
+out="$( ( cd "$sandbox" && . "$_env_plain" >/dev/null 2>&1 && . "$_restore" >/dev/null 2>&1 && type -t cd 2>/dev/null ) )"
+check "restore 拆掉 env.sh 的 cd 包装" "builtin" "$out"
+
+# 别人装的同名函数不许动：改写 read 为自己的转发，restore 应保留并说一声
+err="$( ( cd "$sandbox" && . "$_env" >/dev/null 2>&1 && read() { builtin echo fake; } && . "$_restore" 2>&1 >/dev/null ) )"
+case "$err" in
+	*"不是 rweg 装的"*read*) ok "外来 read 被点名保留（stderr）" ;;
+	*) bad "外来 read 被点名保留（stderr）" "got [$err]" ;;
+esac
+out="$( ( cd "$sandbox" && . "$_env" >/dev/null 2>&1 && read() { builtin echo fake; } && . "$_restore" >/dev/null 2>&1; printf '%s|%s' "$(read)" "$(type -t read)" ) )"
+check "外来 read 未被拆" "fake|function" "$out"
+
+# --all：h* 层、PATH、ns / 配置钉住 / 安装变量一起拆
+out="$(rsx --all probe_all)"
+check "--all 拆 h* / core-rweg / RWEG_NS / RWEG_PIN_CONFIG" "none/none/unset/unset" "$out"
+pcount="$(rsx --all bash -c 'echo $PATH' |
+	tr ':' '\n' | path_hits "$_home/bin" "$(posix "$_home")/bin")"
+check "--all 把 \$RWEG_BIN 从 PATH 摘掉" "0" "$pcount"
+
+# 幂等：拆两次不炸；直接执行（非 source）被拒绝
+out="$( ( cd "$sandbox" && . "$_env" >/dev/null 2>&1 && . "$_restore" >/dev/null 2>&1 && . "$_restore" >/dev/null 2>&1 && echo ok ) )"
+check "重复 restore 幂等" "ok" "$out"
+rcv="$(rsh bash "$_restore" >/dev/null 2>&1; echo $?)"
+check "直接执行（非 source）→ 1" "1" "$rcv"
+case "$(rsh bash "$_restore" 2>&1)" in
+	*"必须 source"*) ok "拒绝信息指路 source" ;;
+	*) bad "拒绝信息指路 source" "got [$(rsh bash "$_restore" 2>&1)]" ;;
+esac
+
 # ── 汇总 ──
 echo
 if [ "$fail" -eq 0 ]; then
