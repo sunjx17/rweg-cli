@@ -86,6 +86,7 @@ id_ed25519*
 .zcode/
 .dsh/
 .idea/
+.qoder/
 .trae/
 *.iml
 *.ipr

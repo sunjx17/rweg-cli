@@ -2,9 +2,9 @@
 
 > 文有常兮锚不移，行虽迁兮指不迷。
 
-为终端编书者（人或 AI）授行锚之五器。
+为终端编书者（人或 AI）授行锚之八器。
 
-**English**: rweg is a zero-config CLI suite of line-anchored file tools for AI agents — `read`, `edit`, `write`, `grep`, `undo`, `append`, `prepend`. Every line carries a stable 3-char anchor, so the agent edits by short anchors instead of re-echoing whole blocks (as str_replace does), with stale-anchor rejection, atomic multi-edit, undo, and UTF-8/GBK/UTF-16 + CRLF/BOM fidelity. Built for Git Bash / MSYS agent shells. Star it if it saves you tokens.
+**English**: rweg is a zero-config CLI suite of line-anchored file tools for AI agents — `read`, `edit`, `replace`, `write`, `grep`, `undo`, `append`, `prepend`. Every line carries a stable 3-char anchor, so the agent edits by short anchors instead of re-echoing whole blocks (as str_replace does), with stale-anchor rejection, atomic multi-edit, undo, and UTF-8/GBK/UTF-16 + CRLF/BOM fidelity. Built for Git Bash / MSYS agent shells. Star it if it saves you tokens.
 
 ---
 
@@ -36,7 +36,7 @@ RWEG_HOME=/d/tools/rweg ./scripts/install.sh
 $RWEG_HOME/                缺省 ~/.rweg
 ├── bin/                   core-rweg.exe —— 唯一二进制（工具入口是它的子命令）
 ├── scripts/
-│   ├── env.sh             非侵入入口：h* 别名 + undo / append / prepend（原名）
+│   ├── env.sh             非侵入入口：h* 别名（hread…hreplace…）+ undo / append / prepend（原名）
 │   ├── env.aggressive.sh  侵入入口：另把 read/write/edit/grep 与 cd 提示接管
 │   └── env.restore.sh     反注册入口：拆掉接管层，恢复内置
 ├── db/                    安装级默认库目录
@@ -49,11 +49,11 @@ $RWEG_HOME/                缺省 ~/.rweg
 
 | 入口 | 给什么 | 动什么 |
 |---|---|---|
-| `source ~/.rweg/scripts/env.sh` | 路径 / ns / 配置钉住 + 七个工具的 `h*` 别名（`hread` `hwrite` `hedit` `hgrep` `hundo` `happend` `hprepend`）+ 与 bash 不重名的原名 `undo` `append` `prepend` | 不碰 `read` / `write` / `edit` / `grep` 这四个同名命令；`cd` 只加一行提示（不 export，子脚本里仍是内置 `cd`） |
+| `source ~/.rweg/scripts/env.sh` | 路径 / ns / 配置钉住 + 八个工具的 `h*` 别名（`hread` `hwrite` `hedit` `hreplace` `hgrep` `hundo` `happend` `hprepend`）+ 与 bash 不重名的原名 `undo` `append` `prepend` | 不碰 `read` / `write` / `edit` / `grep` 这四个同名命令，也不碰系统的 `replace`；`cd` 只加一行提示（不 export，子脚本里仍是内置 `cd`） |
 | `source ~/.rweg/scripts/env.aggressive.sh` | 上面全部，另加 `read` `write` `edit` `grep` 强行接管 | 覆盖 bash 内置 `read` 与系统 `grep`；`cd` 的警告提示打开（仍不 export，子脚本里是内置 `cd`） |
 | `source ~/.rweg/scripts/env.restore.sh` | 反注册：拆掉接管层，`read`/`write`/`edit`/`grep`/`cd` 回到 bash 内置与 PATH | 加 `--all` 连 `env.sh` 那层一起拆（`h*` / 原名 `undo` `append` `prepend` / PATH / `RWEG_NS` / 配置钉住） |
 
-`env.aggressive.sh` 先 source `env.sh` 再叠一层。两份名字只有四个命令需要区分：`read` / `write` / `edit` / `grep` 在非侵入模式下写作 `hread` / `hwrite` / `hedit` / `hgrep`；`undo` / `append` / `prepend` 与 bash 不重名，两种模式都用原名（同时也都有 `h*` 别名：`hundo` / `happend` / `hprepend`）。工具入口都是 `core-rweg` 的子命令（`core-rweg read ...`），`bin/` 里只有 `core-rweg` 一个二进制。
+`env.aggressive.sh` 先 source `env.sh` 再叠一层。两份名字只有五个命令需要区分：`read` / `write` / `edit` / `replace` / `grep` 在非侵入模式下写作 `hread` / `hwrite` / `hedit` / `hreplace` / `hgrep`（`replace` 只此一名 —— Windows 自带 `System32\replace.exe`，不抢它）；`undo` / `append` / `prepend` 与 bash 不重名，两种模式都用原名（同时也都有 `h*` 别名：`hundo` / `happend` / `hprepend`）。工具入口都是 `core-rweg` 的子命令（`core-rweg read ...`），`bin/` 里只有 `core-rweg` 一个二进制。
 
 成功时**一声不吭**：stdout 与 stderr 皆空，source 的输出可安全被管道 / 命令替换捕获。欲见就绪信息，`RWEG_VERBOSE=1 source ~/.rweg/scripts/env.sh`（走 stderr）。装好与否的权威判据是 `core-rweg doctor`。
 
@@ -78,6 +78,8 @@ read src/app.ts 1:6                          # 简写：文件放最前，省掉
 append  src/app.ts nVR "  // 插在这行之后"     # 文件 + 单锚点定位置
 prepend src/app.ts nVR "  // 插在这行之前"
 edit src/app.ts nVR:nVR "const x = 42;"
+replace -f src/app.ts -c nVR "x = 1;" "x = 42;"      # 行内子串替换
+replace -f src/app.ts -cr nVR 'x = (\d+);' 'x = ${1}0;'   # 行内正则替换
 write src/new.ts "export const a = 1;"
 grep -n hello src/
 undo src/app.ts                              # 退回上一次改动之前
@@ -87,7 +89,7 @@ edit -f src/app.ts -c nVR:nVR "const x = 42;"
 write -f src/new.ts -c "export const a = 1;"
 ```
 
-（非侵入模式下 `read` / `write` / `edit` / `grep` 要写 `hread` / `hwrite` / `hedit` / `hgrep`；`undo` / `append` / `prepend` 两种模式同名。下文各节同此。）
+（非侵入模式下 `read` / `write` / `edit` / `replace` / `grep` 要写 `hread` / `hwrite` / `hedit` / `hreplace` / `hgrep`；`undo` / `append` / `prepend` 两种模式同名。下文各节同此。）
 
 换项目：改钉住的配置路径（或重开终端）。`source` 时钉住，之后 `cd` 不改判落点：
 
@@ -108,7 +110,7 @@ $ unset RWEG_PIN_CONFIG                      # 回到"每次按 cwd 现找"
 
 ## 工具
 
-七个工具与 `core-rweg` 及其子命令皆认 `-h` / `--help` / `help`：`read -h`、`grep -h`、`core-rweg cfg -h` 打的都是 rweg 自己的用法（`grep -h` 不再落到 ripgrep 的手册）。下文用接管后的短名 `read` / `write` / `edit` / `grep` / `undo` / `append` / `prepend`；非侵入模式下前四个写作 `hread` / `hwrite` / `hedit` / `hgrep`，后三个同名，参数与输出完全一致。给 Agent 的完整约定：`core-rweg prompt`。
+八个工具与 `core-rweg` 及其子命令皆认 `-h` / `--help` / `help`：`read -h`、`replace -h`、`grep -h`、`core-rweg cfg -h` 打的都是 rweg 自己的用法（`grep -h` 不再落到 ripgrep 的手册）。下文用接管后的短名 `read` / `write` / `edit` / `replace` / `grep` / `undo` / `append` / `prepend`；非侵入模式下这四个与 `grep` 写作 `hread` / `hwrite` / `hedit` / `hreplace` / `hgrep`（`replace` 不占系统那个名字 —— Windows 自带 `System32\replace.exe`，故它只有 `h*` 形态），`undo` / `append` / `prepend` 两种模式同名，参数与输出完全一致。给 Agent 的完整约定：`core-rweg prompt`。
 
 ### 无锚形态 `-fn`
 
@@ -238,6 +240,38 @@ AU6│}
 
 替换文本里行首像锚点、但**不属于本文件当前锚点**时（例如贴回来的是旧锚点），内容照写，只往 stderr 打一条 `W_SERVED_PREFIX_MISMATCH` / `W_NEVER_SERVED_SHAPE` 软警告；`--json` 时这些警告进 `warnings` 字段。
 
+### `replace` —— 行内子串 / 正则替换
+
+```
+replace -f FILE -c  ANCHOR OLDSTR "REPLACEMENT"
+replace -f FILE -cr ANCHOR REGEX  "REPLACEMENT"
+```
+
+在 `ANCHOR` 圈定的行内做替换，其余行不动。`ANCHOR` 是单行锚（`CTt`）或一个区间（`CTt:AU6`，含首尾）。`FILE` 必须用 `-f` 点名：本工具的位置参数是锚点与两条文本，故不做「`FILE` 放最前」的简写。
+
+- `-c` 精确子串：每一处 `OLDSTR`（非正则，含 `-` / `(` 等一律按字面）换成 `REPLACEMENT`
+- `-cr` 正则（Go / RE2）：每一处匹配换成 `REPLACEMENT`，支持子匹配 `$1` / `${name}`。
+  后跟字母 / 数字 / 下划线时括号不能省 —— `$1_` 会被读成组名 `1_`（空串）
+- 匹配与替换都是**逐行**的：模式不跨行，一行里命中几处就换几处
+- `""` 作替换文本 = 删掉匹配；整行命中则得到一个空行（不是删行）
+- 锚点须来自本终端的 `read` / `grep`，与 `edit` 同一套校验链（含区间逐行比对基线）
+
+```bash
+$ read -f src/app.ts 4:4
+nVR│const x = 1;
+$ replace -f src/app.ts -c nVR "x = 1;" "x = 42;"    # 不必复述整行
+replaced ok
+  AU6│}
+- nVR│const x = 1;
++ EPx│const x = 42;
+  yAZ│let y = 2;
+src/app.ts (6 → 6 lines, +1 -1)
+
+$ replace -f src/app.ts -cr EPx 'x = (\d+);' 'x = ${1}0;'
+```
+
+不改动的行不进 `edit.Op`，所以锚点照旧保留、diff 里也只出现真正变了的行。整个区间没有一处命中 → `E_NO_MATCH`；命中了但算出来的文本与原行相同 → `E_NO_CHANGE`；两者都不写盘。输出、`--json`、`-q`、撤销、编码 / 行尾 / BOM 保真与 `edit` 完全一致（`undo` 里记的 kind 是 `replace`）。
+
 ### `append` / `prepend` —— 单锚点插行
 
 ```
@@ -339,7 +373,7 @@ undo [FILE]
 undo -f FILE
 ```
 
-把 `FILE` 退回上一次改动（`write` / `edit` / `append` / `prepend`）之前；不给 `FILE` 就退最近一次改动，不限路径。
+把 `FILE` 退回上一次改动（`write` / `edit` / `replace` / `append` / `prepend`）之前；不给 `FILE` 就退最近一次改动，不限路径。
 
 - 恢复的是**原始字节**：编码、BOM、行尾风格一并回来
 - 每个 namespace 记最近 16 次改动，单条上限 4 MiB（超了报 `E_UNDO_TOO_BIG`）
@@ -367,7 +401,7 @@ hint: undo 只回退本 namespace 里 rweg 自己写过的最近 16 次改动；
 core-rweg prompt          # 打印整段模板
 ```
 
-输出是一份可直接贴进 system prompt 或项目 `AGENTS.md` 的约定：各工具何时用、命令形态（含 `read FILE` / `edit FILE FROM:TO` / `write FILE` / `append FILE ANCHOR` 简写）、输出读法（`# 路径 (行数, 行尾)` / `FROM:TO:` / `锚点│内容`，以及 `edit` 的 git 风格差异与 `...` 省略）、锚点规则（只在本终端、见到的行一律入基线、报 `E_STALE_*` 按 hint 处理、多组改动原子）、撤销语义、退出码 0/1/2/3、回退路径（`builtin read`、grep 透传、`-E`/`-G` 兼容）、以及配置钉住（`RWEG_PIN_CONFIG`）。
+输出是一份可直接贴进 system prompt 或项目 `AGENTS.md` 的约定：各工具何时用、命令形态（含 `read FILE` / `edit FILE FROM:TO` / `replace -f FILE -c ANCHOR` / `write FILE` / `append FILE ANCHOR` 简写）、输出读法（`# 路径 (行数, 行尾)` / `FROM:TO:` / `锚点│内容`，以及 `edit` 的 git 风格差异与 `...` 省略）、锚点规则（只在本终端、见到的行一律入基线、报 `E_STALE_*` 按 hint 处理、多组改动原子）、撤销语义、退出码 0/1/2/3、回退路径（`builtin read`、grep 透传、`-E`/`-G` 兼容）、以及配置钉住（`RWEG_PIN_CONFIG`）。
 
 模板随二进制走（`internal/app/prompt.go`），不依赖安装目录里另存文件，故 `core-rweg prompt` 与当前版本永远一致；各工具自己的 `-h` 末尾也会指到这里。
 
@@ -384,6 +418,8 @@ core-rweg prompt          # 打印整段模板
 | 内容外改仍照旧落笔 | 逐行比基线；`E_STALE_RANGE` + 回传现状 |
 | 见过的行却不可编辑（被迫重读） | `read` / `grep` / `write` / diff / 失败回显一律入基线 |
 | 把 read 输出整行当替换内容 | 行首锚点命中本文件 → `E_ANCHOR_IN_CONTENT` 直拒 |
+| 行内改一小段却要复述整行 | `replace` 只给模式与替换文本，逐行定位；没变的行不动 |
+| 替换后整行变空而被当成删行 | 空行（`[""]`）与删区间（空切片）分开表达 |
 | 未读之行顺为“已读” | 基线以空串示“未 serve”，位移后仍空串 |
 | 区间边界靠“行数未变”猜 | 逐行记行尾 + 显式映射，不猜 |
 | 半截文件（写半而崩） | 临时文件 + `rename`；库写单事务 |
@@ -490,15 +526,15 @@ core-rweg doctor      # 环境自检（路径 / 配置 / 库 / rg / 自检向量
 │   ├── docfile/            文件加载（BOM / 行尾 / 编码 / 二进制探测）
 │   ├── ranges/             RANGE 解析 / 合并 / 基线集合
 │   ├── edit/               校验链 + 原地应用 + buildDiff（git 风格统一 diff）+ 内容行首锚点扫描
-│   └── app/                CLI：子命令分发（read/write/edit/grep/undo/append/prepend + cfg/doctor/prompt…）/ grep 参数归一化
+│   └── app/                CLI：子命令分发（read/write/edit/replace/grep/undo/append/prepend + cfg/doctor/prompt…）/ grep 参数归一化
 ├── scripts/
 │   ├── build.sh            编译 + 铺产物（./dist/）+ selftest
 │   ├── install.sh          装到 $RWEG_HOME
 │   ├── env.sh              非侵入入口：h* 名字
 │   ├── env.aggressive.sh   侵入入口：同名接管 + cd 提示
 │   ├── env.restore.sh      反注册：source 它恢复内置
-│   ├── shell-test.sh       shell 层验收 70 项
-│   └── e2e-test.sh         e2e 202 项
+│   ├── shell-test.sh       shell 层验收 72 项
+│   └── e2e-test.sh         e2e 263 项
 ├── dist-home/rweg.toml     安装级配置模板
 ├── examples/project-rweg.toml  项目级配置模板
 ├── rweg.toml               本仓库配置
@@ -508,9 +544,9 @@ core-rweg doctor      # 环境自检（路径 / 配置 / 库 / rg / 自检向量
 ### 测验
 
 ```bash
-go test ./internal/...        # 220 个用例（194 个测试函数）
-./scripts/shell-test.sh       # 70 项：builtin 覆盖 / source 输出 / PATH / 幂等 / 配置钉住 / 退出码
-./scripts/e2e-test.sh         # 202 项：锚点稳定性 / 校验链 / 原子性 / 编码 / diff 形态 / 简写 / undo / -h / prompt
+go test ./internal/...        # 231 个用例（199 个测试函数）
+./scripts/shell-test.sh       # 72 项：builtin 覆盖 / source 输出 / PATH / 幂等 / 配置钉住 / 退出码
+./scripts/e2e-test.sh         # 263 项：锚点稳定性 / 校验链 / 原子性 / 编码 / diff 形态 / replace / 简写 / undo / -h / prompt
 ```
 
 二者都真跑已装的 `$RWEG_HOME`，故改完先 `./scripts/build.sh && ./scripts/install.sh`。`build.sh` 与 `e2e-test.sh` 会把自己算出的路径经 `cygpath` 交给原生 `go`/`core-rweg.exe`（见其中 `native()`）：`MSYS_NO_PATHCONV=1` 的 shell（dsh 等 agent shell）里，`go build -o /c/...` 会写到 `C:\c\...`，dist 里留旧货 —— 表现为"改了代码、编译也过了，跑起来还是老行为"。

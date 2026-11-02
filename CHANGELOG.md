@@ -4,6 +4,22 @@
 
 ## 未发布
 
+### 新增
+
+- **`replace`：行内子串 / 正则替换**。`replace -f FILE -c ANCHOR OLDSTR "REPLACEMENT"`
+  为精确子串替换，`replace -f FILE -cr ANCHOR REGEX "REPLACEMENT"` 用 Go 正则（RE2，
+  子匹配写 `$1` / `${name}`）。`ANCHOR` 是单行锚或 `FROM:TO` 区间；匹配与替换逐行进行
+  （模式不跨行，一行内命中几处换几处），`""` 替换文本表示删掉匹配。
+  校验链、原子写、撤销、served 重建、diff / `--json` / `-q` 输出、编码与行尾保真
+  全部复用 `edit` 那条路径，只有"新内容怎么算出来"不同：没变的行不进 `edit.Op`，
+  锚点照旧保留。
+  - 整段无命中 → `E_NO_MATCH`；命中但算出来的文本与原行相同 → `E_NO_CHANGE`；
+    空模式 → `E_BAD_PATTERN`，非法正则 → `E_BAD_REGEX`（退出码 2）。前两种不写盘。
+  - `FILE` 只能用 `-f` / `--file` 点名：位置参数已被锚点与两条文本占满，
+    故不做其他工具那种「`FILE` 放最前」的简写。
+  - 装载层随之多一个 `hreplace`（`env.sh` 不占 `replace` 这个名字 ——
+    Windows 自带 `System32\replace.exe`）；`env.restore.sh --all` 一并拆它。
+
 ### 行为
 
 - **`read` / `write` / `grep` 新增无锚形态 `-fn FILE`**（长写法 `--no-anchor FILE`
@@ -21,8 +37,9 @@
 
 ### 文档
 
-- README：namespace 一节补充分派生与确定性派生的区别；测验数字与当前
-  套件对齐。
+- README：新增 `replace` 一节；工具数、装载说明、撤销的 kind 列表与测验数字
+  对齐当前套件；namespace 一节补充分派生与确定性派生的区别。
+- `core-rweg prompt`、各工具 `-h` 同步到 `replace`。
 
 ## v0.2-alpha
 

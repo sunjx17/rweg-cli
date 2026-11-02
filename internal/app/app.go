@@ -67,6 +67,7 @@ const (
 	ToolRead    Tool = "read"
 	ToolWrte    Tool = "write"
 	ToolEdit    Tool = "edit"
+	ToolReplace Tool = "replace"
 	ToolGrep    Tool = "grep"
 	ToolUndo    Tool = "undo"
 	ToolAppend  Tool = "append"
@@ -76,7 +77,7 @@ const (
 // DetectTool 从 os.Args[0] 判断当前是哪个工具。
 //
 // 分发规则：取 basename 去 .exe，若形如 core-rweg / core_rweg / core.rweg
-// 则视为 core；工具名（read/write/edit/grep/undo/append/prepend）直接匹配；
+// 则视为 core；工具名（read/write/edit/replace/grep/undo/append/prepend）直接匹配；
 // 其余一律当 core
 // （这样 `go run ./cmd/core-rweg` 也能工作）。
 func DetectTool(argv0 string) Tool {
@@ -92,6 +93,8 @@ func DetectTool(argv0 string) Tool {
 		return ToolWrte
 	case "edit":
 		return ToolEdit
+	case "replace":
+		return ToolReplace
 	case "grep":
 		return ToolGrep
 	case "undo", "undo-last-edit":

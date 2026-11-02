@@ -153,68 +153,11 @@ func Check(sv ServedView, cur *Current, ops []Op, maxEcho int) (*Validated, *Fai
 
 	resolved := make([]resolvedOp, 0, len(ops))
 	for _, op := range ops {
-		// --- 2 ---
-		if !servedHas(sv, op.From) {
-			return nil, &Failure{Code: CodeUnknownAnchor,
-				Msg: op.From + " not in served anchors"}
-		}
-		if !servedHas(sv, op.To) {
-			return nil, &Failure{Code: CodeUnknownAnchor,
-				Msg: op.To + " not in served anchors"}
-		}
-
-		// --- 3 ---
-		fromPos := cur.Occurs(op.From)
-		toPos := cur.Occurs(op.To)
-		if len(fromPos) > 1 {
-			return nil, ambiguousFailure(cur, op.From, maxEcho)
-		}
-		if len(toPos) > 1 {
-			return nil, ambiguousFailure(cur, op.To, maxEcho)
-		}
-		start, okS := firstOrZero(fromPos)
-		end, okE := firstOrZero(toPos)
-		if !okS || !okE {
-			// 哪个解不出来就报哪个；能解出来的那个用来定位回传窗口。
-			bad, at := op.From, servedPos(sv, op.From)
-			if okS {
-				bad, at = op.To, servedPos(sv, op.To)
-			}
-			f := &Failure{Code: CodeStaleAnchor,
-				Msg: bad + " no longer resolves in this file"}
-			if at >= 1 {
-				lo := at - 1
-				if lo < 1 {
-					lo = 1
-				}
-				hi := at + 1
-				if hi > cur.LineCount() {
-					hi = cur.LineCount()
-				}
-				if lo <= hi {
-					f.Region = ranges.Range{Start: lo, End: hi}
-					f.RegionValid = true
-					f.Lines = collect(cur, lo, hi, maxEcho)
-				}
-			}
+		r, f := resolveOneOp(sv, cur, op, maxEcho)
+		if f != nil {
 			return nil, f
 		}
-		if start > end {
-			return nil, &Failure{Code: CodeBadRange,
-				Msg: fmt.Sprintf("%s:%s is reversed (%d > %d)", op.From, op.To, start, end)}
-		}
-
-		// --- 4 ---
-		if !rangeMatches(sv, cur, start, end) {
-			f := &Failure{Code: CodeStaleRange,
-				Msg: fmt.Sprintf("lines %d-%d changed since read", start, end)}
-			f.Region = ranges.Range{Start: start, End: end}
-			f.RegionValid = true
-			f.Lines = collect(cur, start, end, maxEcho)
-			return nil, f
-		}
-
-		resolved = append(resolved, resolvedOp{Op: op, Range: ranges.Range{Start: start, End: end}})
+		resolved = append(resolved, r)
 	}
 
 	// --- 区间之间不允许重叠：一次调用里的两个 -c 改同一段无法定义顺序 ---
@@ -229,6 +172,90 @@ func Check(sv ServedView, cur *Current, ops []Op, maxEcho int) (*Validated, *Fai
 		}
 	}
 	return &Validated{ops: resolved}, nil
+}
+
+// resolveOneOp 是校验链第 2–4 步：锚在 served 里 → 能在当前文件中唯一解析 →
+// 区间内每行当前锚点与 served 记录一致。通过则返回带行号的解析结果。
+func resolveOneOp(sv ServedView, cur *Current, op Op, maxEcho int) (resolvedOp, *Failure) {
+	// --- 2 ---
+	if !servedHas(sv, op.From) {
+		return resolvedOp{}, &Failure{Code: CodeUnknownAnchor,
+			Msg: op.From + " not in served anchors"}
+	}
+	if !servedHas(sv, op.To) {
+		return resolvedOp{}, &Failure{Code: CodeUnknownAnchor,
+			Msg: op.To + " not in served anchors"}
+	}
+
+	// --- 3 ---
+	fromPos := cur.Occurs(op.From)
+	toPos := cur.Occurs(op.To)
+	if len(fromPos) > 1 {
+		return resolvedOp{}, ambiguousFailure(cur, op.From, maxEcho)
+	}
+	if len(toPos) > 1 {
+		return resolvedOp{}, ambiguousFailure(cur, op.To, maxEcho)
+	}
+	start, okS := firstOrZero(fromPos)
+	end, okE := firstOrZero(toPos)
+	if !okS || !okE {
+		// 哪个解不出来就报哪个；能解出来的那个用来定位回传窗口。
+		bad, at := op.From, servedPos(sv, op.From)
+		if okS {
+			bad, at = op.To, servedPos(sv, op.To)
+		}
+		f := &Failure{Code: CodeStaleAnchor,
+			Msg: bad + " no longer resolves in this file"}
+		if at >= 1 {
+			lo := at - 1
+			if lo < 1 {
+				lo = 1
+			}
+			hi := at + 1
+			if hi > cur.LineCount() {
+				hi = cur.LineCount()
+			}
+			if lo <= hi {
+				f.Region = ranges.Range{Start: lo, End: hi}
+				f.RegionValid = true
+				f.Lines = collect(cur, lo, hi, maxEcho)
+			}
+		}
+		return resolvedOp{}, f
+	}
+	if start > end {
+		return resolvedOp{}, &Failure{Code: CodeBadRange,
+			Msg: fmt.Sprintf("%s:%s is reversed (%d > %d)", op.From, op.To, start, end)}
+	}
+
+	// --- 4 ---
+	if !rangeMatches(sv, cur, start, end) {
+		f := &Failure{Code: CodeStaleRange,
+			Msg: fmt.Sprintf("lines %d-%d changed since read", start, end)}
+		f.Region = ranges.Range{Start: start, End: end}
+		f.RegionValid = true
+		f.Lines = collect(cur, start, end, maxEcho)
+		return resolvedOp{}, f
+	}
+	return resolvedOp{Op: op, Range: ranges.Range{Start: start, End: end}}, nil
+}
+
+// ResolveRange 解析并校验一个锚点区间，供 replace 用：它的作用域是"范围内每一行"，
+// 与 edit 的"把这段换成别的"不同 —— 动作发生前并不知道哪几行会变，
+// 所以只校验区间本身，不做任何替换语义的假设。
+//
+// 判据与 Check 完全同源（served 存在 / 锚可解析且唯一 / 区间逐行与基线一致），
+// 于是 replace 的拒绝码、回传区域与 edit 一致。
+func ResolveRange(sv ServedView, cur *Current, from, to string, maxEcho int) (ranges.Range, *Failure) {
+	if !sv.Exists {
+		return ranges.Range{}, &Failure{Code: CodeNeverRead,
+			Msg: "has never been read in this namespace"}
+	}
+	r, f := resolveOneOp(sv, cur, Op{From: from, To: to}, maxEcho)
+	if f != nil {
+		return ranges.Range{}, f
+	}
+	return r.Range, nil
 }
 
 // --- Result / Block ---

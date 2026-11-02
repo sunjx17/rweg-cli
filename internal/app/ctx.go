@@ -126,7 +126,7 @@ func parseFlags(tool Tool, args []string) flagSet {
 				i++
 				f.rest = append(f.rest, args[i])
 			}
-		case "-c", "--content", "--change":
+		case "-c", "--content", "--change", "-cr", "--change-regex":
 			n := flagValueArity(tool, a)
 			f.rest = append(f.rest, a)
 			for k := 0; k < n && i+1 < len(args); k++ {
@@ -149,14 +149,23 @@ func parseFlags(tool Tool, args []string) flagSet {
 // flagValueArity 返回某 flag 后面跟几个值。
 //
 // edit 的 `-c` 是两个（锚点对 + 替换文本），append / prepend 的 `-c` 也是两个
-// （单锚点 + 内容）；write 的 `-c` 是一个。
+// （单锚点 + 内容），replace 的 `-c` / `-cr` 是三个（锚点 + 模式 + 替换文本），
+// write 的 `-c` 是一个。
 func flagValueArity(tool Tool, flag string) int {
 	switch flag {
 	case "-c", "--change", "--content":
-		if tool == ToolEdit || tool == ToolAppend || tool == ToolPrepend {
+		switch tool {
+		case ToolEdit, ToolAppend, ToolPrepend:
 			return 2
+		case ToolReplace:
+			return 3
 		}
 		return 1
+	case "-cr", "--change-regex":
+		if tool == ToolReplace {
+			return 3
+		}
+		return 0
 	}
 	return 0
 }

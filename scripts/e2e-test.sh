@@ -804,6 +804,218 @@ contains "全读上限标 truncated" "(20000 lines, lf, truncated)" \
         "$(rsh "$_sb" read -f many.txt 2>/dev/null | sed -n 1p)"
 
 # ─────────────────────────────────────────────────────────────
+section S "replace：范围内子串 / 正则替换"
+# ─────────────────────────────────────────────────────────────
+new_sandbox src
+write_app_ts "$_sb" src/app.ts
+rsh "$_sb" read -f src/app.ts 1:6 >/dev/null 2>&1
+
+# 取某几行的锚点（逗号分隔）——read 输出里每行的「锚点│内容」取第一段。
+anchors_at() { # anchors_at <相对路径> <范围...>
+	local f="$1"
+	shift
+	rsh "$_sb" read -f "$f" "$@" 2>/dev/null | awk -F"$SEP" 'NF>1{print $1}' | tr '\n' ','
+}
+
+# --- 精确子串：只动目标行，行数不变 ---
+out="$(rsh "$_sb" hreplace -f src/app.ts -c nVR "const x = 1;" "const x = 42;" 2>/dev/null)"
+check "replace 摘要（确认行 + 收尾行）" "replaced ok
+src/app.ts (6 → 6 lines, +1 -1)" "$(printf '%s\n' "$out" | sed -n '1p;$p')"
+contains "差异里有删除行（旧锚点）" "- nVR${SEP}const x = 1;" "$out"
+check "目标行已改" "const x = 42;" "$(sed -n 4p "$_sb/src/app.ts")"
+check "行数不变" "6" "$(wc -l < "$_sb/src/app.ts" | tr -d ' ')"
+check "未动行的锚点全保留" "CTt,Um7,AU6,yAZ,6PY," \
+	"$(anchors_at src/app.ts 1:3)$(anchors_at src/app.ts 5:6)"
+check "改过的行锚点已换新" "no" \
+	"$([ "$(anchors_at src/app.ts 4:4)" = "nVR," ] && echo yes || echo no)"
+
+# -q 只留差异正文（锚点用**改过之后**那一行的，旧锚点已 retired）
+r4="$(anchors_at src/app.ts 4:4)"
+out="$(rsh "$_sb" hreplace -f src/app.ts -q -c "${r4%,}" "const x = 42;" "const x = 7;" 2>/dev/null)"
+contains "-q 只给差异正文（无确认行）" "+ " "$out"
+check "-q 不打确认行" "no" "$(printf '%s\n' "$out" | grep -q '^replaced ok$' && echo yes || echo no)"
+check "-q 改到了目标行" "const x = 7;" "$(sed -n 4p "$_sb/src/app.ts")"
+
+# --- 行内局部替换：该行其余部分原样保留 ---
+y5="$(anchors_at src/app.ts 5:5)"
+rsh "$_sb" hreplace -f src/app.ts -c "${y5%,}" "= 2;" "= 300;" >/dev/null 2>&1
+check "行内局部替换" "let y = 300;" "$(sed -n 5p "$_sb/src/app.ts")"
+check "只动目标行（上一处不受影响）" "const x = 7;" "$(sed -n 4p "$_sb/src/app.ts")"
+
+# --- 一行里命中几处就替换几处 ---
+printf 'aaa aaa aaa\nbbb\n' > "$_sb/multi.txt"
+rsh "$_sb" read -f multi.txt >/dev/null 2>&1
+m1="$(anchors_at multi.txt 1:1)"
+rsh "$_sb" hreplace -f multi.txt -c "${m1%,}" "aaa" "z" >/dev/null 2>&1
+check "一行内多处命中全换" "z z z" "$(sed -n 1p "$_sb/multi.txt")"
+check "未命中的行不动" "bbb" "$(sed -n 2p "$_sb/multi.txt")"
+
+# --- 区间：范围内全换，范围外一个不动（四行内容相同，锚点按出现次序区分） ---
+printf 'foo\nfoo\nfoo\nfoo\n' > "$_sb/range.txt"
+rsh "$_sb" read -f range.txt >/dev/null 2>&1
+r1="$(anchors_at range.txt 1:1)"; r2="$(anchors_at range.txt 2:2)"
+rsh "$_sb" hreplace -f range.txt -c "${r1%,}:${r2%,}" "foo" "bar" >/dev/null 2>&1
+check "区间内两行都换" "bar
+bar" "$(sed -n 1,2p "$_sb/range.txt")"
+check "区间外两行不动" "foo
+foo" "$(sed -n 3,4p "$_sb/range.txt")"
+check "行数不变" "4" "$(wc -l < "$_sb/range.txt" | tr -d ' ')"
+
+# --- 正则：子匹配展开（$1 / ${name}）---
+#
+# ⚠️ 子匹配紧随字母 / 数字 / 下划线时必须用 ${1}：`$1_` 会被 Go 读成组名 "1_"。
+printf 'v1.2.3\nv2.0.0\n' > "$_sb/sem.txt"
+rsh "$_sb" read -f sem.txt >/dev/null 2>&1
+s1="$(anchors_at sem.txt 1:1)"
+rsh "$_sb" hreplace -f sem.txt -cr "${s1%,}" 'v(\d+)\.(\d+)' 'V${1}_${2}' >/dev/null 2>&1
+check "正则子匹配展开" "V1_2.3" "$(sed -n 1p "$_sb/sem.txt")"
+# 字符类 + 整段命中
+s2="$(anchors_at sem.txt 2:2)"
+rsh "$_sb" hreplace -f sem.txt -cr "${s2%,}" '[0-9]+' 'N' >/dev/null 2>&1
+check "正则字符类全换" "vN.N.N" "$(sed -n 2p "$_sb/sem.txt")"
+# 命名子匹配
+printf 'key=value\n' > "$_sb/named.txt"
+rsh "$_sb" read -f named.txt >/dev/null 2>&1
+n1="$(anchors_at named.txt 1:1)"
+rsh "$_sb" hreplace -f named.txt -cr "${n1%,}" '(?P<k>\w+)=(?P<v>\w+)' '${v}/${k}' >/dev/null 2>&1
+check "命名子匹配展开" "value/key" "$(sed -n 1p "$_sb/named.txt")"
+
+# --- 空替换文本 = 删掉匹配；正则命中整行则为空行（不是删行）---
+printf 'key:value\n' > "$_sb/del.txt"
+rsh "$_sb" read -f del.txt >/dev/null 2>&1
+d1="$(anchors_at del.txt 1:1)"
+rsh "$_sb" hreplace -f del.txt -c "${d1%,}" ":value" "" >/dev/null 2>&1
+check "空替换 = 删掉匹配" "key" "$(sed -n 1p "$_sb/del.txt")"
+
+printf 'drop\nkeep\n' > "$_sb/blank.txt"
+rsh "$_sb" read -f blank.txt >/dev/null 2>&1
+b1="$(anchors_at blank.txt 1:1)"
+rsh "$_sb" hreplace -f blank.txt -cr "${b1%,}" '^\S+$' '' >/dev/null 2>&1
+check "整行命中换空 = 空行（不删行）" "2" "$(wc -l < "$_sb/blank.txt" | tr -d ' ')"
+check "第 1 行成空行" "" "$(sed -n 1p "$_sb/blank.txt")"
+check "第 2 行不动" "keep" "$(sed -n 2p "$_sb/blank.txt")"
+
+# --- 替换文本 / 正则长得像 rweg 的 flag 时不能被吞掉 ---
+printf 'a-v-b\n' > "$_sb/flag.txt"
+rsh "$_sb" read -f flag.txt >/dev/null 2>&1
+f1="$(anchors_at flag.txt 1:1)"
+rsh "$_sb" hreplace -f flag.txt -cr "${f1%,}" "-v" "V" >/dev/null 2>&1
+check "正则本身像 flag（-v）不被吞" "aV-b" "$(sed -n 1p "$_sb/flag.txt")"
+printf 'x\n' > "$_sb/flag2.txt"
+rsh "$_sb" read -f flag2.txt >/dev/null 2>&1
+f2="$(anchors_at flag2.txt 1:1)"
+rsh "$_sb" hreplace -f flag2.txt -c "${f2%,}" "x" "-q" >/dev/null 2>&1
+check "替换文本像 flag（-q）不被吞" "-q" "$(sed -n 1p "$_sb/flag2.txt")"
+
+# --- 编码保真：GBK 文件替换后仍是 GBK 字节 ---
+printf '\xd6\xd0\xce\xc4\xba\xc5\xca\xa1\n' > "$_sb/gbk.txt"   # 中文号省
+rsh "$_sb" read -f gbk.txt >/dev/null 2>&1
+g1="$(anchors_at gbk.txt 1:1)"
+rsh "$_sb" hreplace -f gbk.txt -c "${g1%,}" "号省" "号省二号" >/dev/null 2>&1
+if cmp -s <(printf '\xd6\xd0\xce\xc4\xba\xc5\xca\xa1\xb6\xfe\xba\xc5\n') "$_sb/gbk.txt"; then
+	ok "GBK 文件替换后仍是 GBK 字节"
+else
+	bad "GBK 文件替换后仍是 GBK 字节" "$(od -An -tx1 "$_sb/gbk.txt")"
+fi
+
+# --- undo 记的 kind 是 replace ---
+rsh "$_sb" read -f src/app.ts 4:4 >/dev/null 2>&1
+contains "undo 记 replace" "undone replace" "$(rsh "$_sb" undo src/app.ts 2>/dev/null)"
+
+# --- 拒绝路径 ---
+new_sandbox src
+write_app_ts "$_sb" src/app.ts
+rsh "$_sb" read -f src/app.ts 1:6 >/dev/null 2>&1
+
+err="$(rsh "$_sb" hreplace -f src/app.ts -c nVR "zzzznope" "x" 2>&1 >/dev/null)"
+rcv="$(rsh "$_sb" hreplace -f src/app.ts -c nVR "zzzznope" "x" >/dev/null 2>&1; echo $?)"
+check "无命中 → 退出码 1" "1" "$rcv"
+contains "无命中 → E_NO_MATCH" "E_NO_MATCH" "$err"
+contains "无命中给出范围" "lines 4-4" "$err"
+
+err="$(rsh "$_sb" hreplace -f src/app.ts -c nVR "const x" "const x" 2>&1 >/dev/null)"
+rcv="$(rsh "$_sb" hreplace -f src/app.ts -c nVR "const x" "const x" >/dev/null 2>&1; echo $?)"
+check "命中但文本没变 → 1" "1" "$rcv"
+contains "命中但文本没变 → E_NO_CHANGE" "E_NO_CHANGE" "$err"
+check "E_NO_MATCH 不写盘" "const x = 1;" "$(sed -n 4p "$_sb/src/app.ts")"
+
+# 锚点形状非法 / 缺 -f / 简写形态 → 用法错误 2
+rcv="$(rsh "$_sb" hreplace -f src/app.ts -c ZZ "a" "b" >/dev/null 2>&1; echo $?)"
+check "锚点形状非法 → 2" "2" "$rcv"
+rcv="$(rsh "$_sb" hreplace -c nVR "a" "b" >/dev/null 2>&1; echo $?)"
+check "缺 -f → 2" "2" "$rcv"
+contains "缺 -f 时点出必须用 -f" "FILE must be named with -f" \
+	"$(rsh "$_sb" hreplace src/app.ts nVR "a" "b" 2>&1)"
+rcv="$(rsh "$_sb" hreplace src/app.ts nVR "a" "b" >/dev/null 2>&1; echo $?)"
+check "不做 FILE 放最前的简写 → 2" "2" "$rcv"
+rcv="$(rsh "$_sb" hreplace -f src/app.ts -c nVR "a" >/dev/null 2>&1; echo $?)"
+check "-c 缺值 → 2" "2" "$rcv"
+
+# 空模式 / 非法正则 → 用法错误 2
+contains "空模式 → E_BAD_PATTERN" "E_BAD_PATTERN" \
+	"$(rsh "$_sb" hreplace -f src/app.ts -c nVR "" "x" 2>&1)"
+rcv="$(rsh "$_sb" hreplace -f src/app.ts -c nVR "" "x" >/dev/null 2>&1; echo $?)"
+check "空模式 → 2" "2" "$rcv"
+contains "非法正则 → E_BAD_REGEX" "E_BAD_REGEX" \
+	"$(rsh "$_sb" hreplace -f src/app.ts -cr nVR "(" "x" 2>&1)"
+rcv="$(rsh "$_sb" hreplace -f src/app.ts -cr nVR "(" "x" >/dev/null 2>&1; echo $?)"
+check "非法正则 → 2" "2" "$rcv"
+
+# 未读过的文件
+printf 'a\nb\n' > "$_sb/src/never.ts"
+err="$(rsh "$_sb" hreplace -f src/never.ts -c CTt "a" "b" 2>&1 >/dev/null)"
+rcv="$(rsh "$_sb" hreplace -f src/never.ts -c CTt "a" "b" >/dev/null 2>&1; echo $?)"
+check "未读过 → 1" "1" "$rcv"
+contains "未读过 → E_NEVER_READ" "E_NEVER_READ" "$err"
+
+# 区间里有行被外部改过 → E_STALE_RANGE + 不写盘
+#
+# ⚠️ 只跑**一次**并同时收 stdout/stderr 与退出码：失败回显会把当前区间写进
+# served（reject-and-serve），再跑第二次时同样的锚点反而能过 —— 那是设计行为，
+# 不是"该失败却没失败"。
+new_sandbox src
+write_app_ts "$_sb" src/app.ts
+rsh "$_sb" read -f src/app.ts 1:6 >/dev/null 2>&1
+sed -i 's/console\.log("world");/console.log("world!!!");/' "$_sb/src/app.ts"
+# 副本要在外部改动**之后**取：要比的是"这次 replace 有没有动文件"，
+# 不是"文件与 read 时是否一致"（sed 那一步本来就该让它不一致）。
+cp "$_sb/src/app.ts" "$_work/re_before.ts"
+out="$(rsh "$_sb" hreplace -f src/app.ts -c CTt:AU6 "console" "LOG" 2>&1)"
+rcv=$?
+check "区间过期 → 1" "1" "$rcv"
+contains "区间过期 → E_STALE_RANGE" "E_STALE_RANGE" "$out"
+contains "回传的是当前锚点" "nEt${SEP}" "$out"
+if cmp -s "$_work/re_before.ts" "$_sb/src/app.ts"; then
+	ok "区间过期时不写盘"
+else
+	bad "区间过期时不写盘" "file changed"
+fi
+# 区间跨到未 serve 的行（只读了 1:3 / 5:6）→ 拒
+new_sandbox src
+write_app_ts "$_sb" src/app.ts
+rsh "$_sb" read -f src/app.ts 1:3 5:6 >/dev/null 2>&1
+c3="$(anchors_at src/app.ts 3:3)"; c5="$(anchors_at src/app.ts 5:5)"
+err="$(rsh "$_sb" hreplace -f src/app.ts -c "${c3%,}:${c5%,}" "let" "LET" 2>&1 >/dev/null)"
+contains "区间整体过校验链（未 serve 的行也拒）" "E_STALE_RANGE" "$err"
+
+# --json 可用
+new_sandbox src
+write_app_ts "$_sb" src/app.ts
+rsh "$_sb" read -f src/app.ts 1:6 >/dev/null 2>&1
+js="$(rsh "$_sb" hreplace -f src/app.ts -c nVR "const x = 1;" "const x = 42;" --json 2>/dev/null)"
+contains "replace --json 有 path" '"path"' "$js"
+contains "replace --json 有 diff" '"diff"' "$js"
+contains "replace --json 计数" '"added": 1' "$js"
+
+# -h 帮助与 core-rweg 子命令形态
+contains "replace -h 出用法" "replace -f FILE -c ANCHOR OLDSTR" \
+	"$(rsh "$_sb" hreplace -h 2>&1 | sed -n 1p)"
+rsh "$_sb" read -f src/app.ts 4:4 >/dev/null 2>&1
+c4="$(anchors_at src/app.ts 4:4)"
+contains "core-rweg replace 子命令可用" "replaced ok" \
+	"$(rsh "$_sb" core-rweg replace -f src/app.ts -c "${c4%,}" "const x = 42;" "const x = 43;" 2>&1 | sed -n 1p)"
+
+# ─────────────────────────────────────────────────────────────
 printf '\n'
 if [ "$fail" -eq 0 ]; then
 	echo "e2e test: $pass passed, 0 failed"

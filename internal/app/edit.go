@@ -188,12 +188,13 @@ func runEdit(c *Ctx, args []string) error {
 	return applyEdit(c, a.file, a.ops, "edited")
 }
 
-// applyEdit 是 edit / append / prepend 共用的写入链路。
+// applyEdit 是 edit / replace / append / prepend 共用的写入链路。
 //
 // 调用方只负责把动作表达成若干 edit.Op：append / prepend 传进来的那条 op
-// 把被锚定的行替换成「它自己 + 新行」（prepend 反过来），所以校验链、原子写、
-// undo、served 重建沿用同一条路径，不为插入另开分支。
-// verb 是成功输出的动词（edited / appended / prepended）。
+// 把被锚定的行替换成「它自己 + 新行」（prepend 反过来），replace 传的是
+// 逐行算出来的新文本，所以校验链、原子写、undo、served 重建沿用同一条路径，
+// 不为每种动作另开分支。
+// verb 是成功输出的动词（edited / replaced / appended / prepended）。
 //
 // 流程（plan §7.1）：
 //

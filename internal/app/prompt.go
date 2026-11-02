@@ -27,14 +27,15 @@ const agentPrompt = `# rweg 工具约定（贴进 Agent 的 system prompt）
 
 本机已装 rweg。行锚（hashline）工具是 core-rweg 的子命令，由 env.sh 注入成 bash 函数：
 
-    source ~/.rweg/scripts/env.sh             → 七个工具的 h* 函数：hread / hwrite / hedit /
-                                                hgrep / hundo / happend / hprepend
-                                                （undo / append / prepend 另有不带 h 的原名）
+    source ~/.rweg/scripts/env.sh             → 八个工具的 h* 函数：hread / hwrite / hedit /
+                                                hreplace / hgrep / hundo / happend / hprepend
+                                                （undo / append / prepend 另有不带 h 的原名；
+                                                 replace 不带：系统自带 replace.exe，不抢这个名字）
     source ~/.rweg/scripts/env.aggressive.sh  → 另把 read / write / edit / grep 强行接管
                                                 （同名覆盖；cd 另加提示）
 
-下文用短名 read / write / edit / grep / undo / append / prepend；非侵入模式下只有前四个
-要加 h（hread / hwrite / hedit / hgrep），undo / append / prepend 两种模式同名。
+下文用短名 read / write / edit / replace / grep / undo / append / prepend；非侵入模式下这五个
+要加 h（hread / hwrite / hedit / hreplace / hgrep），undo / append / prepend 两种模式同名。
 用法与系统同名命令不同。
 以下约定优先于你惯用的 cat / sed / 整文件重写。
 
@@ -42,9 +43,10 @@ const agentPrompt = `# rweg 工具约定（贴进 Agent 的 system prompt）
 
 - 看文件：read（不要 cat / head / sed）；只读需要的行，省 token。
 - 改文件：edit + 锚点（不要整体重写，也不要复述未改动的行）。
+- 改行内一小段：replace（不必复述整行，也不怕行里有引号 / 转义）。
 - 找位置：grep（参数同 ripgrep），命中行自带锚点，可直接 edit。
 - 插一行：append / prepend + 文件 + 单个锚点（位置只由锚点定，文件必填）。
-- 改错了：undo 退回上一次 write / edit / append / prepend 之前的内容。
+- 改错了：undo 退回上一次 write / edit / replace / append / prepend 之前的内容。
 
 ## 命令
 
@@ -56,6 +58,12 @@ const agentPrompt = `# rweg 工具约定（贴进 Agent 的 system prompt）
           FROM:TO 省略 :TO 即 FROM:FROM。
           CONTENT 里的换行必须是**真换行**：$'a\nb'、here-doc，或从 stdin 喂；
           写成 \n 两个字符只会原样插入这两个字符。"" 删除该区间。
+    replace -f FILE -c  ANCHOR OLDSTR "NEW"   行内精确子串替换（逐行，命中的都换）
+    replace -f FILE -cr ANCHOR REGEX  "NEW"   同上但用 Go 正则；子匹配写 ${1} / ${name}
+          ANCHOR 是单行锚或 FROM:TO 区间；模式不跨行；"" 删除匹配。
+          ${1} 的括号不能省：$1_ 会被读成组名 "1_"。
+          FILE 必须 -f 点名（位置参数是锚点与两条文本）。未命中报 E_NO_MATCH、
+          命中但文本没变报 E_NO_CHANGE，都不写盘。
     write FILE "content"
           不给 content 则从 stdin 读全文；整文件替换；目录必须已存在。
           内容不以换行结尾时会自动补一个；要精确控制就走 stdin。
@@ -66,17 +74,18 @@ const agentPrompt = `# rweg 工具约定（贴进 Agent 的 system prompt）
            CONTENT 的换行与 edit 同源（真换行：$'a\nb' / here-doc / 命令替换）。
            CONTENT 恰好是 -v / -q / -h / -f / -c / --json 时用 -c ANCHOR CONTENT 形态。
 
-FILE 放在最前面就能省掉 -f。要把 flag 写在文件名前面（read --encoding gbk FILE）
-时改用 -f FILE 形式，两者等价；旧写法 read -f FILE / write -f FILE -c CONTENT /
-edit -f FILE -c FROM:TO CONTENT 照旧可用。
+FILE 放在最前面就能省掉 -f（read / write / edit / append / prepend 皆可）。
+要把 flag 写在文件名前面（read --encoding gbk FILE）时改用 -f FILE 形式，两者等价；
+旧写法 read -f FILE / write -f FILE -c CONTENT / edit -f FILE -c FROM:TO CONTENT 照旧可用。
+replace 是例外：它的位置参数已被锚点与两条文本占满，文件只能用 -f 点名。
 
 read / write / grep 还接受 -fn FILE（长写法 --no-anchor FILE / --no-anchor=FILE），
 它与 -f 等价，区别是**完全不产生锚点**：read 只给内容（每行没有「锚点│」前缀），
 write 成功时只回一行确认、不回显内容，grep 只给「行号:内容」。只想看内容、或要把
 结果接进管道时用它；这些行不记入 served，也就不能直接拿去 edit。
 
-帮助：read -h / write -h / edit -h / grep -h / undo -h / append -h / prepend -h /
-core-rweg -h。
+帮助：read -h / write -h / edit -h / replace -h / grep -h / undo -h / append -h /
+prepend -h / core-rweg -h。
 
 ## 输出形态
 
@@ -110,13 +119,13 @@ edit 报错时回传的当前区间仍用「锚点│内容」形态，且这些
 
 - 锚点是 3 字符（如 CTt），只在本终端的 read / grep 之后有效，且只对同一文件。
   锚点由内容决定：不同文件里内容相同的行会得到同一个锚点，别跨文件复用。
-- 读过的行进入基线；edit / append / prepend 只认基线里的锚点，所以 grep 或 read
-  之后才能改。**见到的行一律进基线**：read / grep 的输出、write 回传的全文、
-  edit 回传的 diff（含上下文行）、失败回显的当前区间，随后都能直接拿来改。
+- 读过的行进入基线；edit / replace / append / prepend 只认基线里的锚点，所以 grep 或
+  read 之后才能改。**见到的行一律进基线**：read / grep 的输出、write 回传的全文、
+  edit / replace 回传的 diff（含上下文行）、失败回显的当前区间，随后都能直接拿来改。
   append / prepend 的位置由单个锚点给出，文件必须点名（不做跨文件反查）。
 - edit 报 E_STALE_RANGE / E_STALE_ANCHOR / E_AMBIGUOUS_ANCHOR 时按 hint 处理：
   回显出来的行已经进基线，可以直接用它们重试；E_UNKNOWN_ANCHOR（本终端没读过）
-  才需要先 read。
+  才需要先 read。replace 的区间走同一条校验链，报法一致。
 - 替换文本里误带行首锚点（把 read 输出整行贴回来，如 "CTt│foo"）：前缀命中本文件
   当前锚点 → E_ANCHOR_IN_CONTENT 硬拒、不写盘；其余只给 W_ 软警告，内容照写。
 - 一次 edit 的多个改动原子生效：任一失败则文件与基线都不动。

@@ -11,7 +11,7 @@
 # 并在 stderr 说一声是谁占着。`unset -f` 会连带清掉 BASH_FUNC_* 导出，
 # 所以从那之后起的子进程也回到内置。
 #
-# --all 还会：unset hread / hwrite / hedit / hgrep / hundo / happend / hprepend /
+# --all 还会：unset hread / hwrite / hedit / hreplace / hgrep / hundo / happend / hprepend /
 # hundo_last_edit / undo / append / prepend / core-rweg 十二个函数、把 $RWEG_BIN 从 PATH 里摘掉、
 # unset RWEG_NS /
 # RWEG_PIN_CONFIG / RWEG_HOME / RWEG_BIN / _rweg_core —— 即回到"从未 source 过"。
@@ -66,7 +66,7 @@ fi
 
 # --- 2. --all：env.sh 那层（h* / PATH / ns / 配置钉住）也拆 ---
 if [ "$_rweg_all" = 1 ]; then
-	for _rweg_fn in hread hwrite hedit hgrep hundo happend hprepend hundo_last_edit undo append prepend core-rweg; do
+	for _rweg_fn in hread hwrite hedit hreplace hgrep hundo happend hprepend hundo_last_edit undo append prepend core-rweg; do
 		unset -f "$_rweg_fn" 2>/dev/null || true
 	done
 	if [ -n "${RWEG_BIN:-}" ]; then

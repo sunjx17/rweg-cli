@@ -35,7 +35,7 @@ func dispatch(tool Tool, args []string) error {
 	switch tool {
 	case ToolCore:
 		return runCore(args)
-	case ToolRead, ToolWrte, ToolEdit, ToolGrep, ToolUndo, ToolAppend, ToolPrepend:
+	case ToolRead, ToolWrte, ToolEdit, ToolReplace, ToolGrep, ToolUndo, ToolAppend, ToolPrepend:
 		return runTool(tool, args)
 	}
 	return UsageErr("unknown tool %q", tool)
@@ -77,6 +77,8 @@ func runTool(tool Tool, args []string) error {
 		return runWrite(c, rest)
 	case ToolEdit:
 		return runEdit(c, rest)
+	case ToolReplace:
+		return runReplace(c, rest)
 	case ToolUndo:
 		return runUndo(c, rest)
 	case ToolAppend, ToolPrepend:
@@ -248,6 +250,31 @@ t.txt (2 → 3 lines, +1)
 命中本文件当前锚点的行硬拒（E_ANCHOR_IN_CONTENT，不写盘），
 其余只给 W_ 软警告，内容照写。
 `
+	case ToolReplace:
+		return `replace -f FILE -c ANCHOR OLDSTR "REPLACEMENT"
+replace -f FILE -cr ANCHOR REGEX "REPLACEMENT"
+
+在 ANCHOR 圈定的行内做子串替换，不改动别的行：-c 是精确子串，
+-cr 是 Go 正则（RE2）。
+
+ANCHOR 是单行锚（CTt）或一个区间（CTt:AU6，含首尾）。
+匹配与替换都是**逐行**的：模式不跨行，一行里命中几处就替换几处。
+
+  -c  ANCHOR OLDSTR "NEW"     每一处 OLDSTR（精确，非正则）换成 NEW
+  -cr ANCHOR REGEX  "NEW"     每一处匹配替换成 NEW；"" 表示删掉匹配
+
+-cr 的 REGEX 支持子匹配，REPLACEMENT 里用 $1 / ${name} 引用：后跟
+字母 / 数字 / 下划线时必须写花括号 —— "$1_" 会被读成组名 "1_"（空）。
+
+FILE 必须用 -f 点名：本工具的位置参数是锚点与两条文本，故不做
+「FILE 放最前」的简写。锚点须来自本终端的 read / grep，与 edit 同一套
+校验链：区间内任一行与基线不符 → E_STALE_RANGE 并回传当前锚点。
+整个区间没有一处命中 → E_NO_MATCH；命中了但文本没变 → E_NO_CHANGE。
+两种情况下都不写盘。
+
+成功输出与 edit 同形：一行 replaced ok + git 风格差异 + 一行收尾；
+改动前的内容进撤销栈，undo 可退回（记的 kind 是 replace）。
+`
 	case ToolGrep:
 		return `grep [rg 的参数]... [--] 路径
 
@@ -272,7 +299,7 @@ GNU 习惯的两个兼容点：
 		return `undo [FILE]
 undo -f FILE
 
-把 FILE 退回上一次改动（write / edit / append / prepend）之前：内容按当时磁盘上的**原始字节**恢复
+把 FILE 退回上一次改动（write / edit / replace / append / prepend）之前：内容按当时磁盘上的**原始字节**恢复
 （编码、BOM、行尾风格一并回来），随后重建该路径的 served 锚点 ——
 内容回到旧样子，旧锚点重新有效。
 
@@ -332,7 +359,7 @@ func runCore(args []string) error {
 		return cmdNS(args[1:])
 	case "gc":
 		return cmdGC(args[1:])
-	case "read", "write", "edit", "grep", "undo", "append", "prepend":
+	case "read", "write", "edit", "replace", "grep", "undo", "append", "prepend":
 		// 工具名当子命令：装出来的 bin 里只有 core-rweg 一个二进制，
 		// env.sh 的 h* 函数与 env.aggressive.sh 的同名接管都走这条路。
 		return runTool(Tool(args[0]), args[1:])
@@ -366,7 +393,7 @@ func coreHelp() string {
   RWEG_NS             当前终端的 namespace，由 env.sh 生成
   RWEG_VERBOSE        置非 0 值后，source env.sh 会往 stderr 打就绪信息
 
-工具入口：core-rweg read|write|edit|grep|undo|append|prepend ...（各有 -h），
+工具入口：core-rweg read|write|edit|replace|grep|undo|append|prepend ...（各有 -h），
 	与 argv[0]
 分发（read.exe / grep.exe 之类的硬链接）等价 —— 现在只装 core-rweg 一个二进制。
 `

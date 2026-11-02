@@ -19,7 +19,7 @@ set -uo pipefail
 # 调用者的 shell 若已经 source 过 env.sh / env.aggressive.sh，那些函数会随 export -f
 # 进到本脚本里；本脚本验的是"source 之后有什么"，所以先把继承来的 rweg 函数擦干净，
 # 子进程也不再收到 BASH_FUNC_* 导出。
-for _fn in read write edit grep cd hread hwrite hedit hgrep hundo happend hprepend hundo_last_edit undo append prepend core-rweg; do
+for _fn in read write edit replace grep cd hread hwrite hedit hreplace hgrep hundo happend hprepend hundo_last_edit undo append prepend core-rweg; do
     unset -f "$_fn" 2>/dev/null || true
 done
 unset _fn
@@ -195,6 +195,10 @@ check "grep 未被接管（仍是 PATH 上的命令）" "file" "$(rshp type -t g
 check "hread 就绪" "function" "$(rshp type -t hread)"
 check "hwrite / hedit / hgrep 就绪" "function/function/function" \
     "$(rshp bash -c 'printf "%s/%s/%s" "$(type -t hwrite)" "$(type -t hedit)" "$(type -t hgrep)"')"
+check "hreplace 就绪" "function" "$(rshp type -t hreplace)"
+# replace 这个名字留给系统（Windows 自带 System32\replace.exe），rweg 只用 hreplace
+check "replace 这个名字没被 rweg 占用" "notfn" \
+    "$(rshp bash -c 'declare -F replace >/dev/null 2>&1 && echo fn || echo notfn')"
 check "undo / append / prepend（与 bash 不重名）就绪" "function/function/function" \
     "$(rshp bash -c 'printf "%s/%s/%s" "$(type -t undo)" "$(type -t append)" "$(type -t prepend)"')"
 check "子进程也拿到 h*（export -f）" "function" "$(rshp bash -c 'type -t hread')"

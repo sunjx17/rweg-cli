@@ -12,7 +12,7 @@
 #   4. 后台跑一次 GC —— 清理过期 namespace / 快照
 #
 # 工具是 core-rweg 的子命令（bin 里只有这一个二进制），本层给 h 前缀别名：
-#     hread / hwrite / hedit / hgrep / hundo / happend / hprepend / hundo_last_edit
+#     hread / hwrite / hedit / hreplace / hgrep / hundo / happend / hprepend / hundo_last_edit
 # read / write / edit / grep / undo 与 bash 原生 cd **一个都不动**。
 #
 # 幂等：同一终端重复 source 不产生第二个 ns、PATH 不堆积。
@@ -106,6 +106,10 @@ esac
 hread()  { "$_rweg_core" read  "$@"; }
 hwrite() { "$_rweg_core" write "$@"; }
 hedit()  { "$_rweg_core" edit  "$@"; }
+# 行内子串 / 正则替换：只给 h* 名，**不占 replace 这个名字**
+# —— Windows 自带 %SystemRoot%\System32\replace.exe（文件替换工具），
+# 抢了它会让别人的脚本与 rweg 都莫名失败。它也不是 bash 内置，故无需接管。
+hreplace() { "$_rweg_core" replace "$@"; }
 hgrep()  { "$_rweg_core" grep  "$@"; }
 hundo()  { "$_rweg_core" undo  "$@"; }
 # 只在某一行前后插内容：位置由单个锚点定，文件必填（core-rweg append -h 有细节）。
@@ -123,7 +127,7 @@ core-rweg() { "$_rweg_core" "$@"; }
 # --- 1d. export -f
 
 if [ -n "${BASH_VERSION:-}" ]; then
-	export -f hread hwrite hedit hgrep hundo happend hprepend hundo_last_edit undo append prepend core-rweg 2>/dev/null || true
+	export -f hread hwrite hedit hreplace hgrep hundo happend hprepend hundo_last_edit undo append prepend core-rweg 2>/dev/null || true
 fi
 
 # --- 2. namespace：已存在则复用 ---
@@ -177,7 +181,7 @@ unset _rweg_src _rweg_dir _rweg_home_posix _rweg_home_native
 if [ -n "${RWEG_VERBOSE:-}" ] && [ "${RWEG_VERBOSE}" != "0" ]; then
 	{
 		echo "rweg ready (home=$RWEG_HOME, ns=${RWEG_NS:-<cwd-derived>}, walkup=${RWEG_WALKUP:-0})"
-		echo "  h* 工具hread / hwrite / hedit / hgrep +  append / prepend / undo / undo_last_edit 就绪" # 后面四个就不写h*了，但也可以用
+		echo "  h* 工具hread / hwrite / hedit / hreplace / hgrep +  append / prepend / undo / undo_last_edit 就绪" # 后面四个就不写h*了，但也可以用
 		echo "  要同名接管（read/write/edit/grep）：source env.aggressive.sh"
 		echo "  诊断：core-rweg cfg | core-rweg doctor；Agent 提示词：core-rweg prompt"
 		echo "  配置钉住：${RWEG_PIN_CONFIG:-<无，按 cwd 现找>}"
