@@ -460,3 +460,44 @@ func TestEchoCap(t *testing.T) {
 func makeCurrent(lines []string) *Current {
 	return NewCurrent(lines, hashline.Pure(lines, hashline.DefaultProbeStride, nil))
 }
+
+// 未编辑的旧行，落库的 served 必须记它**当前**的锚点。
+//
+// 有重复内容行时 MapStable 的就近配对会跨位继承（A 行的锚点落在 B 行的新
+// 位置）；旧实现照抄基线里那个位置的锚点，落库的 served 与实际锚点对不上，
+// 下一轮 edit 未动过的行会莫名 E_STALE_RANGE（fail-closed 的误拒陷阱）。
+func TestApplyServedTracksCurrentAnchor(t *testing.T) {
+	oldLines := []string{"x", "x", "y", "y"}
+	oldHashes := []string{"H11", "H12", "H21", "H22"}
+	sv := ServedView{Exists: true, Hashes: oldHashes}
+	cur := NewCurrent(oldLines, oldHashes)
+
+	v, fail := Check(sv, cur, []Op{{From: "H11", To: "H12", Replacement: []string{"NEW"}}}, 10)
+	if fail != nil {
+		t.Fatalf("check: %v", fail)
+	}
+	res := Apply(cur, v, sv, nil, 3907, 1)
+
+	for i, s := range res.Served {
+		if s == "" {
+			continue
+		}
+		if s != res.Hashes[i] {
+			t.Fatalf("served[%d] = %q, want the line's CURRENT anchor %q", i+1, s, res.Hashes[i])
+		}
+	}
+	// y 行确实跨位继承过（不然这个测试什么都没测到）：
+	// 旧位置的 served（H21/H22）与新位置的锚点至少有一处不同。
+	same := true
+	for i := range res.Served {
+		if res.Served[i] != "" && res.Served[i] == sv.Hashes[i] {
+			continue
+		}
+		if res.Served[i] != "" {
+			same = false
+		}
+	}
+	if same {
+		t.Fatalf("测试场景退化：served 与基线完全同位（%v），没有覆盖跨位继承", res.Served)
+	}
+}

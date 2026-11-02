@@ -108,9 +108,19 @@ func parseInsertArgs(tool Tool, args []string) (*insertArgs, error) {
 // splitInsertContent 把插入内容切成行。
 //
 // 与 edit 的 splitReplacement 相反：这里 "" 不是「删除」，而是「插入一个空行」——
-// 插入动作没有"删掉"可言，空内容只能理解成空行（strings.Split 正好如此）。
+// 插入动作没有"删掉"可言，空内容只能理解成空行。
+// 其余规则与 splitReplacement 一致：结尾一个换行是行结束符（不多出一行），
+// 每行结尾的 \r 剥掉（防 CRLF 来源的内容落成 \r\r\n）。
 func splitInsertContent(content string) []string {
-	return strings.Split(content, "\n")
+	content = strings.TrimSuffix(content, "\n")
+	if content == "" {
+		return []string{""} // "" 与 "\n" 都插一个空行
+	}
+	lines := strings.Split(content, "\n")
+	for i, ln := range lines {
+		lines[i] = strings.TrimSuffix(ln, "\r")
+	}
+	return lines
 }
 
 // runInsert 是 append / prepend 的实现（方向由 c.Tool 决定）。

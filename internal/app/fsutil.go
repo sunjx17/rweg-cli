@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"rweg/internal/store"
 )
@@ -55,7 +56,16 @@ func writeFileAtomic(path string, data []byte) error {
 	if firstErr == nil {
 		return nil
 	}
-	// Windows 上目标被独占打开时 rename 会失败。删掉目标再试一次——
+	// Windows 上 rename 偶发失败，常见原因是杀毒 / 索引服务短暂握着目标
+	// 文件 —— 先做几次有界重试（间隔内大概率自己松手），别急着走破坏性路径。
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for i := 0; time.Now().Before(deadline) && i < 5; i++ {
+		time.Sleep(time.Duration(i+1) * 10 * time.Millisecond)
+		if err := os.Rename(tmpName, path); err == nil {
+			return nil
+		}
+	}
+	// 最后手段：目标被独占打开时 rename 一直失败。删掉目标再试一次——
 	// 此时原子性已经破了，但"能写进去"比"绝对原子"更重要。
 	if err := os.Remove(path); err == nil {
 		if err := os.Rename(tmpName, path); err == nil {

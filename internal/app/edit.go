@@ -169,14 +169,26 @@ func anchorShapeErr(s string) error {
 
 // splitReplacement 把替换文本切成行。
 //
-//	""      → 无行（删除）
-//	"a"     → ["a"]
-//	"a\nb"  → ["a", "b"]
+//	""       → 无行（删除）
+//	"a"      → ["a"]
+//	"a\nb"   → ["a", "b"]
+//	"a\n"    → ["a"]        结尾一个换行是**行结束符**，不会多出一个空行
+//	"a\n\n"  → ["a", ""]    要在末尾补空行就多写一个换行
+//
+// 结尾换行按终止符处理：模型常把 read 输出的行原样贴回来（带着结尾换行、
+// 或 here-doc 的尾换行），旧实现会把它们当"再插一个空行"——静默多一行。
+// 每行结尾的 \r 一并剥掉：CRLF 来源的内容（docfile 加载时已剥 \r）若不剥，
+// RenderEncoded 会再补一次行尾，落盘成 \r\r\n。
 func splitReplacement(content string) []string {
 	if content == "" {
 		return nil
 	}
-	return strings.Split(content, "\n")
+	content = strings.TrimSuffix(content, "\n")
+	lines := strings.Split(content, "\n")
+	for i, ln := range lines {
+		lines[i] = strings.TrimSuffix(ln, "\r")
+	}
+	return lines
 }
 
 // runEdit 是 edit 的实现：解析参数，把活交给 applyEdit。

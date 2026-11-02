@@ -265,7 +265,8 @@ func ResolveRange(sv ServedView, cur *Current, from, to string, maxEcho int) (ra
 // Served 是**新的 served 数组**（长度 = len(Lines)）：
 //   - 编辑区间里的新行标记为 served；
 //   - diff 会打印出来的每一行（上下文 + 新增）也按新行号标记为 served；
-//   - 其余未编辑的旧行沿用旧的 served 值（可能仍是空串 = 未 serve）。
+//   - 其余未编辑的旧行保留"见过"状态（基线里非空就继续非空），
+//     锚点按它**当前**的值记（可能与基线同位置的值不同 —— 就近配对会跨位）。
 //
 // 这样既不让"没读过的行"凭空变 served（fail-closed），
 // 又让"读完改一行、顺手再改相邻行"这种常见链路不必重读。
@@ -361,8 +362,13 @@ func Apply(cur *Current, v *Validated, sv ServedView, reserved map[string]bool,
 		if np < 0 || editedNew[np] {
 			continue
 		}
-		if k < len(sv.Hashes) {
-			newServed[np] = sv.Hashes[k]
+		if k < len(sv.Hashes) && sv.Hashes[k] != "" {
+			// 未编辑的旧行，模型见过它的内容 → 继续算"见过"。
+			// 记它**现在**的锚点（newHashes[np]），不是基线里那个位置的旧锚点：
+			// 有重复内容行时，MapStable 的就近配对可能把 A 行的锚点继承到
+			// B 行的新位置 —— 照抄旧锚点落库后，served 与实际锚点对不上，
+			// 下一轮 edit 这行会被莫名 E_STALE_RANGE（fail-closed 的误拒陷阱）。
+			newServed[np] = newHashes[np]
 		}
 	}
 	for _, sp := range spans {

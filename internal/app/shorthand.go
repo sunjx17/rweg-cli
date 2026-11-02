@@ -33,12 +33,13 @@ func fileShorthand(args []string) (file string, rest []string, ok bool) {
 // —— 适合只想拿纯内容（脚本、管道、只看一眼）的场景。
 //
 // 返回值：file 为 -fn 给出的路径（没写则空），rest 是摘掉该 flag 后的参数。
+// 第二次出现的 -fn / --no-anchor 原样保留，由各工具的参数解析报错。
 func stripNoAnchor(args []string) (file string, rest []string, ok bool) {
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		s := args[i]
 		switch {
-		case (s == "-fn" || s == "--no-anchor") && ok == false:
+		case (s == "-fn" || s == "--no-anchor") && !ok:
 			if i+1 >= len(args) {
 				// 没给值：原样留着，由各工具的参数解析报用法错误
 				out = append(out, s)
@@ -46,8 +47,6 @@ func stripNoAnchor(args []string) (file string, rest []string, ok bool) {
 			}
 			i++
 			file, ok = args[i], true
-		case ok && s == "--no-anchor" && strings.HasPrefix(s, "--no-anchor="):
-			out = append(out, s)
 		case !ok && strings.HasPrefix(s, "--no-anchor="):
 			file, ok = s[len("--no-anchor="):], true
 		default:
