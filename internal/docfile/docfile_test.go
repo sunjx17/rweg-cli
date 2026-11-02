@@ -50,8 +50,9 @@ func TestSplitLines(t *testing.T) {
 		{"a\n\n", []string{"a", ""}, NewlineLF, true},
 		{"\n", []string{""}, NewlineLF, true},
 		{"\n\n", []string{"", ""}, NewlineLF, true},
-		// 纯 CR（经典 Mac）
-		{"a\rb\r", []string{"a", "b"}, NewlineLF, true},
+		// 纯 CR（经典 Mac）：主行尾如实报 CR，写回复用（旧版误报 LF）
+		{"a\rb\r", []string{"a", "b"}, NewlineCR, true},
+		{"a\rb", []string{"a", "b"}, NewlineCR, false},
 	}
 	for _, c := range cases {
 		d := parse(t, c.in, Options{})
@@ -318,8 +319,10 @@ func TestGBKAutoDetected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GBK should be auto-detected: %v", err)
 	}
-	if d.Encoding != EncodingGB18030 {
-		t.Errorf("Encoding = %q, want gb18030", d.Encoding)
+	// 探测按解码结果的字符分布选表：GBK 范围内的字节报更精确的 gbk
+	//（旧版一律报 GB18030 这个超集名字）。
+	if d.Encoding != EncodingGBK {
+		t.Errorf("Encoding = %q, want gbk", d.Encoding)
 	}
 	if d.Lines[0] != "中文" {
 		t.Errorf("line 1 = %q, want 中文", d.Lines[0])
@@ -501,10 +504,10 @@ func TestRenderEncodedKeepsGBK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	// 探测会先试 gb18030（GBK 的超集，必然也能往返），所以编码名是 gb18030。
-	// 对 GBK 范围内的字符，两者的字节完全一致 —— 往返仍然逐字节相同。
-	if d.Encoding != EncodingGB18030 {
-		t.Fatalf("encoding = %q, want gb18030", d.Encoding)
+	// 探测按字符分布选表，GBK 范围内的字节报 gbk。
+	// 写回时按这个名字编码，字节与原文件一致。
+	if d.Encoding != EncodingGBK {
+		t.Fatalf("encoding = %q, want gbk", d.Encoding)
 	}
 	out, err := d.RenderEncoded(d.Lines, nil)
 	if err != nil {
@@ -577,5 +580,72 @@ func TestRenderIsPlainUTF8(t *testing.T) {
 	}
 	if !utf8Valid(d.Render(d.Lines)) {
 		t.Fatal("Render should produce UTF-8 regardless of source encoding")
+	}
+}
+
+// 纯 CR（经典 Mac）行尾：分行按 CR、主行尾报 NewlineCR、不算 mixed。
+// 旧实现把 \r 归一成 \n 分行但把主行尾记成 LF —— 文件被编辑后会被
+// 悄悄重排成 LF（写回时"复用原行尾"的契约就此落空）。
+func TestSplitLinesPureCR(t *testing.T) {
+	lines, nl, crlf, lf, cr, mixed, trailing, ends := splitLines([]byte("a\rb\rc\r"))
+	if len(lines) != 3 || lines[0] != "a" || lines[2] != "c" {
+		t.Fatalf("lines = %q", lines)
+	}
+	if nl != NewlineCR || cr != 3 || crlf != 0 || lf != 0 {
+		t.Fatalf("nl=%q crlf=%d lf=%d cr=%d", nl, crlf, lf, cr)
+	}
+	if mixed || !trailing || len(ends) != 3 {
+		t.Fatalf("mixed=%v trailing=%v ends=%v", mixed, trailing, ends)
+	}
+	for _, e := range ends {
+		if e != NewlineCR {
+			t.Fatalf("ends = %q", ends)
+		}
+	}
+}
+
+// 无尾行尾的纯 CR 文件同样成立。
+func TestSplitLinesPureCRNoTrailing(t *testing.T) {
+	lines, nl, _, _, cr, mixed, trailing, _ := splitLines([]byte("a\rb"))
+	if len(lines) != 2 || lines[1] != "b" || trailing {
+		t.Fatalf("lines=%q trailing=%v", lines, trailing)
+	}
+	if nl != NewlineCR || cr != 1 || mixed {
+		t.Fatalf("nl=%q cr=%d mixed=%v", nl, cr, mixed)
+	}
+}
+
+// 混合行尾行为保持：CRLF+LF 混用仍进 mixed，逐行行尾不错位。
+func TestSplitLinesMixedUnchanged(t *testing.T) {
+	lines, nl, crlf, lf, cr, mixed, _, ends := splitLines([]byte("a\r\nb\nc\r\n"))
+	if len(lines) != 3 || nl != NewlineCRLF || crlf != 2 || lf != 1 || cr != 0 || !mixed {
+		t.Fatalf("lines=%q nl=%q crlf=%d lf=%d cr=%d mixed=%v", lines, nl, crlf, lf, cr, mixed)
+	}
+	if ends[0] != NewlineCRLF || ends[1] != NewlineLF || ends[2] != NewlineCRLF {
+		t.Fatalf("ends = %q", ends)
+	}
+}
+
+// 编码探测：往返检查分不出三张 CJK 表（各自双射，用哪张都能无损往返），
+// 必须按解码结果的字符分布选 —— GBK 字节报 gbk、Big5 字节报 big5，且解码正确。
+func TestNegotiateEncodingCJK(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  []byte
+		want string
+		text string
+	}{
+		{"GBK 简体", []byte{0xd6, 0xd0, 0xce, 0xc4, 0xba, 0xc5, 0xca, 0xa1}, EncodingGBK, "中文号省"},
+		{"Big5 繁体", []byte{0xa4, 0xa4, 0xa4, 0xe5}, EncodingBig5, "中文"},
+		{"Big5 罕用字", []byte{0xc0, 0x73, 0xa8, 0xae}, EncodingBig5, "龍車"},
+	}
+	for _, tc := range cases {
+		enc, dec, err := negotiateEncoding(tc.raw, "", tc.name)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if enc != tc.want || string(dec) != tc.text {
+			t.Errorf("%s: got enc=%q text=%q, want %q %q", tc.name, enc, dec, tc.want, tc.text)
+		}
 	}
 }

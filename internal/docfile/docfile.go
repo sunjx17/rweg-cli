@@ -177,7 +177,7 @@ func Parse(absPath string, raw []byte, size int64, opts Options) (*Doc, error) {
 	}
 
 	// --- 4. 行尾与分行 ---
-	lines, nl, crlf, lf, mixed, trailing, ends := splitLines(raw)
+	lines, nl, crlf, lf, _, mixed, trailing, ends := splitLines(raw)
 	d.Lines = lines
 	d.Newline = nl
 	d.CRLFCount = crlf
@@ -314,49 +314,72 @@ func (d *Doc) endingFor(i int, ends []string) string {
 //   - "a" → ["a"]
 //   - "a\n" → ["a"]，trailing = true
 //   - "a\n\n" → ["a", ""]，trailing = true
-func splitLines(raw []byte) (lines []string, nl string, crlf, lf int, mixed, trailing bool, ends []string) {
+//
+// 三种行尾（LF / CRLF / 裸 CR）都算分行符 —— 与旧行为一致（旧实现把 \r
+// 归一成 \n 分行），但行尾**逐行记账**：纯 CR 文件（经典 Mac）现在能被认出
+// NewlineCR，写回复用 CR，而不是被悄悄重排成 LF；CR 与 LF 混用也会进
+// mixed 路径，逐行保真。
+func splitLines(raw []byte) (lines []string, nl string, crlf, lf, cr int, mixed, trailing bool, ends []string) {
 	if len(raw) == 0 {
-		return []string{}, NewlineLF, 0, 0, false, false, nil
+		return []string{}, NewlineLF, 0, 0, 0, false, false, nil
 	}
 	s := string(raw)
 	trailing = strings.HasSuffix(s, "\n") || strings.HasSuffix(s, "\r")
 
-	// 统一切成不含行尾的行
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	s = strings.ReplaceAll(s, "\r", "\n")
-	parts := strings.Split(s, "\n")
-	if trailing && len(parts) > 0 && parts[len(parts)-1] == "" {
-		parts = parts[:len(parts)-1]
-	}
-	lines = parts
-
-	// 统计原始行尾，并逐行记录（第 idx 行用第 idx 个行尾）
+	// 一次扫描：既分行，也按行记录原始行尾。
+	var b strings.Builder
 	for i := 0; i < len(raw); i++ {
-		if raw[i] != '\n' {
-			continue
+		switch raw[i] {
+		case '\n':
+			lines = append(lines, b.String())
+			b.Reset()
+			if i > 0 && raw[i-1] == '\r' {
+				crlf++
+				ends = append(ends, NewlineCRLF)
+			} else {
+				lf++
+				ends = append(ends, NewlineLF)
+			}
+		case '\r':
+			if i+1 < len(raw) && raw[i+1] == '\n' {
+				continue // CRLF 的前半截，等遇到 \n 一起记账
+			}
+			lines = append(lines, b.String())
+			b.Reset()
+			cr++
+			ends = append(ends, NewlineCR)
+		default:
+			b.WriteByte(raw[i])
 		}
-		e := NewlineLF
-		if i > 0 && raw[i-1] == '\r' {
-			crlf++
-			e = NewlineCRLF
-		} else {
-			lf++
-		}
-		ends = append(ends, e)
 	}
-	if crlf > 0 && lf > 0 {
-		mixed = true
+	if !trailing {
+		// 末行没有行尾：单独补上
+		lines = append(lines, b.String())
 	}
+
+	kinds := 0
+	if crlf > 0 {
+		kinds++
+	}
+	if lf > 0 {
+		kinds++
+	}
+	if cr > 0 {
+		kinds++
+	}
+	mixed = kinds > 1
 	switch {
-	case crlf > 0 && crlf >= lf:
+	case crlf > 0 && crlf >= lf && crlf >= cr:
 		nl = NewlineCRLF
+	case cr > 0 && cr >= lf:
+		nl = NewlineCR
 	case lf > 0:
 		nl = NewlineLF
 	default:
-		// 无行尾：可能是单行无换行，也可能是纯 CR
+		// 无行尾（单行无换行文件）：回落 LF
 		nl = NewlineLF
 	}
-	return lines, nl, crlf, lf, mixed, trailing, ends
+	return lines, nl, crlf, lf, cr, mixed, trailing, ends
 }
 
 // findNUL 在前 64KB 里找 NUL 字节。
@@ -374,8 +397,15 @@ func findNUL(raw []byte) (int, bool) {
 	return 0, false
 }
 
-// negotiateEncoding 在非 UTF-8 内容里挑一个能无损往返的编码。
+// negotiateEncoding 在非 UTF-8 内容里挑一个最合适的编码。
 // nameHint 只用于错误信息里的文件名。
+//
+// 只看"能无损往返"是不够的：三张 CJK 编码表的 decode/encode 各自构成双射，
+// 用任何一张都能把任何一张的字节无损往返（实测 GBK 字节按 Big5 解出
+// "笢恅瘍吽"、Big5 字节按 GBK 解出假名"いゅ"，往返都成立）—— 往返一致
+// 只证明表闭合，不证明选对了表。所以再按解码结果的**字符分布**打分：
+// 高频汉字加分，假名 / 注音 / 谚文 / 私用区这类"解读错了的典型产物"扣分，
+// 分高者胜；同分按候选顺序（特指 → 泛化：Big5 → GBK → GB18030）。
 func negotiateEncoding(raw []byte, forced, nameHint string) (enc string, out []byte, err error) {
 	if forced != "" {
 		decoded, err := decode(raw, forced, forced)
@@ -385,21 +415,27 @@ func negotiateEncoding(raw []byte, forced, nameHint string) (enc string, out []b
 		return normalizeEnc(forced), decoded, nil
 	}
 
-	candidates := []string{EncodingGB18030, EncodingGBK, EncodingBig5}
-	for _, c := range candidates {
+	// 特指 → 泛化：GBK 是 GB18030 的子集，Big5 与两者大面积字节重叠，
+	// 把更特指的排前面，同分时优先报更精确的名字。
+	candidates := []string{EncodingBig5, EncodingGBK, EncodingGB18030}
+	best := -1
+	bestScore := 0
+	for i, c := range candidates {
 		decoded, err := decode(raw, c, c)
 		if err != nil {
 			continue
 		}
 		// 再编码回去必须字节一致——否则不是真的这个编码
-		if _, err := encode(decoded, c); err != nil {
-			continue
-		}
 		back, err := encode(decoded, c)
 		if err != nil || !bytes.Equal(back, raw) {
 			continue
 		}
-		return normalizeEnc(c), decoded, nil
+		if s := scoreDecoded(string(decoded)); best < 0 || s > bestScore {
+			best, bestScore = i, s
+		}
+	}
+	if best >= 0 {
+		return normalizeEnc(candidates[best]), decodeMustOK(raw, candidates[best]), nil
 	}
 
 	return "", nil, &Error{
@@ -409,6 +445,57 @@ func negotiateEncoding(raw []byte, forced, nameHint string) (enc string, out []b
 		Hint: fmt.Sprintf("candidates: %s\nhint: read -f <file> --encoding %s",
 			strings.Join(candidates, ", "), EncodingGB18030),
 	}
+}
+
+// decodeMustOK 是 negotiateEncoding 内部的二次解码：能进到这里说明同一候选
+// 刚刚解码往返成功过，出错只可能是内存异常，直接 panic 让测试暴露。
+func decodeMustOK(raw []byte, enc string) []byte {
+	decoded, err := decode(raw, enc, enc)
+	if err != nil {
+		panic(fmt.Sprintf("docfile: re-decode %s failed after successful round-trip: %v", enc, err))
+	}
+	return decoded
+}
+
+// commonHanzi 是最高频汉字的子集（简体为主，带常用繁体），够排序用、不求全。
+// 用途见 negotiateEncoding：解读对了的文本会大量命中这里，解读错了的
+// 乱码大多落不到。
+const commonHanzi = "的一是不了在有人我他这个们中来上大为和地到以说时要就出会可也你对生能而子那得于着下自之年过发后作里用道行所然家种事成方多经么去法学如都同现当没动面起看定天分还进好小部其些主样理心她本前开但因只从想实日军者意无力它与长把机十民第公此已工使情明性知全三又关点正业外将两高间由问很最重并物手应战向头文体政美相见被利什二等产或新己制身果加西斯月话合回特代内信表化老给世位次度门任常先海通教儿原东声提立及比员解水名真论处走义各入几口认条平系气题活尔更别打女变四神总何电数安少报才结反受目太量再感建务做接必场件计管期市直德资命山金指克许统区保至队形社便空决治展马科司五基眼书非则听白却界达光放强即像难且权思王象完设式色路记南品住告类求据程北边死张该交规万取拉格望觉术领共确传师观清今切院让识候带导争运笑飞风步改收根干造言联持组每济车亲极林服快办议往元英士证近失转夫令准布始怎呢存未远叫台单影具罗字爱击流备兵连调深商算质团集百需价花党华城石级整府离况亚请技际约示复病息究线似官火断精满支视消越器容照须九增研写称企八功包片史委乎查轻易早曾除农找装广显吧标谈吃图念六引历首医局突专费号另岁州考" +
+	// 常用繁体（Big5 文件的正确解读会命中）
+	"國說對們東馬車學會來後開門間長問時點頭無為兩語書體愛龍鳳藝廠豐縣礦礙確議廳農"
+
+// scoreDecoded 给解码出的文本打"像不像正常中文"的分。
+//
+// 加分：常用汉字（+4）、中日韩标点与全角字符（+2）、ASCII（+1，保持原样）。
+// 扣分：假名 / 注音 / 谚文（-8，用错表时的典型产物）、私用区 / 彝文（-6，
+// GB18030 四字节或生僻映射的产物）、CJK 扩展 A 等生僻区（-2）、其余（-2）。
+func scoreDecoded(s string) int {
+	score := 0
+	for _, r := range s {
+		switch {
+		case r < 0x80:
+			score++
+		case strings.ContainsRune(commonHanzi, r):
+			score += 4
+		case r >= 0x4E00 && r <= 0x9FFF:
+			score += 1 // CJK 统一表意区，但不常见
+		case (r >= 0x3000 && r <= 0x303F) || (r >= 0xFF00 && r <= 0xFFEF):
+			score += 2 // 中日韩标点 / 全角形式
+		case r >= 0x3040 && r <= 0x30FF:
+			score -= 8 // 假名
+		case r >= 0x3100 && r <= 0x312F:
+			score -= 8 // 注音符号
+		case r >= 0xAC00 && r <= 0xD7AF:
+			score -= 8 // 谚文
+		case r >= 0xE000 && r <= 0xF8FF:
+			score -= 6 // 私用区
+		case r >= 0xA000 && r <= 0xA4CF:
+			score -= 6 // 彝文
+		default:
+			score -= 2
+		}
+	}
+	return score
 }
 
 // decode 按指定编码解码到 UTF-8。

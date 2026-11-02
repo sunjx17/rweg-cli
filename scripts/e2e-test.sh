@@ -441,7 +441,9 @@ contains "报出 NUL 偏移" "NUL byte at offset 1" "$err"
 # 按原文件编码写回。
 printf '\xd6\xd0\xce\xc4\xba\xc5\xca\xa1\n' > "$_sb/gbk.txt"   # 中文号省
 out="$(rsh "$_sb" read -f gbk.txt 2>/dev/null)"
-check "GBK 自动探测（gb18030）" "# gbk.txt (1 line, lf, gb18030)" "$(printf '%s\n' "$out" | sed -n 1p)"
+# ⚠️ 探测按"解码结果的字符分布"打分（Big5 → GBK → GB18030 特指优先）：
+# 纯 GBK 字节现在报更精确的 gbk，而不是被 GB18030 子集关系统吞。
+check "GBK 自动探测（gbk）" "# gbk.txt (1 line, lf, gbk)" "$(printf '%s\n' "$out" | sed -n 1p)"
 check "GBK 内容解码正确" "中文号省" "$(printf '%s\n' "$out" | sed -n 3p | awk -F"$SEP" '{print $2}')"
 a3="$(printf '%s\n' "$out" | anchor_at 1)"
 rsh "$_sb" edit -f gbk.txt -c "$a3:$a3" "中文号省二号" >/dev/null 2>&1
@@ -457,6 +459,32 @@ check "改完还能读回来" "中文号省二号" "$(rsh "$_sb" read -f gbk.txt
 # 强制指定编码
 out="$(rsh "$_sb" read -f gbk.txt --encoding gb18030 2>/dev/null)"
 check "强制编码" "# gbk.txt (1 line, lf, gb18030)" "$(printf '%s\n' "$out" | sed -n 1p)"
+
+# Big5：自动探测不再被 GB18030 吃掉（往返检查分不出表，按字符分布选）。
+printf '\xa4\xa4\xa4\xe5\n' > "$_sb/big5.txt"   # Big5 的「中文」
+out="$(rsh "$_sb" read -f big5.txt 2>/dev/null)"
+check "Big5 自动探测" "# big5.txt (1 line, lf, big5)" "$(printf '%s\n' "$out" | sed -n 1p)"
+check "Big5 内容解码正确" "中文" "$(printf '%s\n' "$out" | sed -n 3p | awk -F"$SEP" '{print $2}')"
+b5="$(printf '%s\n' "$out" | anchor_at 1)"
+rsh "$_sb" edit -f big5.txt -c "$b5:$b5" "中文繁" >/dev/null 2>&1
+check "编辑 Big5 文件（rc）" "0" "$?"
+if cmp -s <(printf '\xa4\xa4\xa4\xe5\xc1\x63\n') "$_sb/big5.txt"; then
+	ok "Big5 写回仍是 Big5 字节"
+else
+	bad "Big5 写回仍是 Big5 字节" "$(od -An -tx1 "$_sb/big5.txt")"
+fi
+
+# 纯 CR 行尾（经典 Mac）：识别为 cr，写回复用 CR（此前被静默重排成 LF）
+printf 'a\rb\rc\r' > "$_sb/cr.txt"
+out="$(rsh "$_sb" read -f cr.txt 2>/dev/null)"
+check "纯 CR 行尾标记" "# cr.txt (3 lines, cr)" "$(printf '%s\n' "$out" | sed -n 1p)"
+cra="$(printf '%s\n' "$out" | anchor_at 1)"
+rsh "$_sb" edit -f cr.txt -c "$cra:$cra" "A" >/dev/null 2>&1
+if cmp -s <(printf 'A\rb\rc\r') "$_sb/cr.txt"; then
+	ok "CR 文件写回仍是 CR"
+else
+	bad "CR 文件写回仍是 CR" "$(od -c "$_sb/cr.txt" | head -2)"
+fi
 
 # ─────────────────────────────────────────────────────────────
 section J "namespace 隔离（同项目双终端）"
