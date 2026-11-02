@@ -48,9 +48,13 @@ func dispatch(tool Tool, args []string) error {
 // 而且它有若干分支需要**直接透传退出码**（os.Exit），必须最早分流。
 func runTool(tool Tool, args []string) error {
 	if tool == ToolGrep {
-		// -h 与 --help 同义：rweg 的 help 优先于 rg 的 help，
-		// 否则 `grep -h` 打的是 ripgrep 的手册（args 里含 "--" 时仍可透传）。
-		if wantsHelp(args) {
+		// grep 的帮助判据比别的工具窄：GNU grep 的 -h 是 --no-filename，
+		// 裸词 help 也常是用户真要搜的模式 —— 只有 --help 恒为帮助；
+		// 裸 `grep -h` / `grep help`（后面没有别的参数）也算帮助。
+		// 其余形态一律进搜索路径（-h 由 parseGrepArgs 翻译成 rg 的 --no-filename），
+		// 否则 `grep -h pat file`、`grep help file` 会"成功"地什么都没搜。
+		if len(args) > 0 &&
+			(args[0] == "--help" || (len(args) == 1 && (args[0] == "-h" || args[0] == "help"))) {
 			printToolHelp(tool)
 			return nil
 		}
@@ -251,20 +255,24 @@ t.txt (2 → 3 lines, +1)
 其余只给 W_ 软警告，内容照写。
 `
 	case ToolReplace:
-		return `replace -f FILE -c ANCHOR OLDSTR "REPLACEMENT"
-replace -f FILE -cr ANCHOR REGEX "REPLACEMENT"
+		return `replace -f FILE -c ANCHOR OLDSTR "REPLACEMENT" [-c ANCHOR OLDSTR "REPLACEMENT" ...]
+replace -f FILE -cr ANCHOR REGEX "REPLACEMENT" [-cr ANCHOR REGEX "REPLACEMENT" ...]
 
 在 ANCHOR 圈定的行内做子串替换，不改动别的行：-c 是精确子串，
--cr 是 Go 正则（RE2）。
+-cr 是 Go 正则（RE2）。-c / -cr 可以重复：一次调用多组改动，全部原子生效
+—— 任一组校验失败则什么都不写；两组的区间不许重叠（E_OVERLAP）。
 
 ANCHOR 是单行锚（CTt）或一个区间（CTt:AU6，含首尾）。
 匹配与替换都是**逐行**的：模式不跨行，一行里命中几处就替换几处。
 
   -c  ANCHOR OLDSTR "NEW"     每一处 OLDSTR（精确，非正则）换成 NEW
   -cr ANCHOR REGEX  "NEW"     每一处匹配替换成 NEW；"" 表示删掉匹配
+  --content 与 -c 同义；--change-regex 与 -cr 同义
 
 -cr 的 REGEX 支持子匹配，REPLACEMENT 里用 $1 / ${name} 引用：后跟
 字母 / 数字 / 下划线时必须写花括号 —— "$1_" 会被读成组名 "1_"（空）。
+匹配空串的正则（x*、(a)? 这类）会被拒（E_BAD_REGEX）：它们会把替换文本
+插进一行里的每个字符之间；^ / $ 这类只有一个空命中位置的不受影响。
 
 FILE 必须用 -f 点名：本工具的位置参数是锚点与两条文本，故不做
 「FILE 放最前」的简写。锚点须来自本终端的 read / grep，与 edit 同一套
@@ -286,14 +294,21 @@ FILE 必须用 -f 点名：本工具的位置参数是锚点与两条文本，�
   1:CTt` + hashline.Sep + `function hello() {
   7:6PY` + hashline.Sep + `export default hello;
 
+--json 输出同一份结果的结构化形态：[{path, lines:[{line, hash, text, match}]}]，
+hash 为空表示该行不可用于 edit（超长行 / 加载失败），match=false 是上下文行。
+
 回退路径（不做锚点处理，行为与 rg/grep 一致）：
   - 没有文件路径（管道输入 / 整目录递归）→ 完全透传
   - rg 不可用 / 执行报错（退出码 ≥2）→ 回退系统 grep，退出码透传
-  - -q / -l 以及 -c（计数）→ 直接透传 rg 的原生行为
+  - -q / -l → 直接透传
+  - -c / --count → rweg 自己数（rg 见 -c 会绕 --json）：GNU 语义，
+    只数**命中行**，-A/-B/-C 的上下文行不算；单文件给数字，多文件给 path:count
 
-GNU 习惯的两个兼容点：
+GNU 习惯的兼容点：
   -E / --extended-regexp   吃掉：rg 的正则默认就是 ERE（rg 的 -E 是 --encoding）
   -G / --basic-regexp      明确报错：rg 没有 BRE，别让语义悄悄变
+  -h（带模式/路径时）      翻译成 rg 的 --no-filename（rg 的 -h 是帮助）；
+                           裸 ` + "`grep -h`" + ` / ` + "`grep help`" + ` 仍是本帮助
 `
 	case ToolUndo:
 		return `undo [FILE]

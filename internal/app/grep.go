@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -153,11 +154,16 @@ func parseGrepArgs(args []string) *grepArgs {
 			// `-c`（计数）必须从转发参数里摘掉：rg 一旦看到 -c 就绕过
 			// --json 直接打印数字，我们就没法解析了。计数由我们自己数。
 			//
+			// `-h`（GNU 的 --no-filename）要从转发里摘掉并换成 rg 认识的
+			// 长写法 —— rg 的 -h 是帮助（裸 `grep -h` 才是 rweg 帮助，
+			// 在 runTool 里已分流；走到这里的 -h 一定带着模式/路径）。
+			//
 			// 转发的**顺序**很要紧：`-A 2` 必须先给 rg 一个 `-A` 再给 `2`。
 			// 早期实现把 flag 攒到最后统一 append，结果变成了 `2 -A`，
 			// 于是 `-e pat -e pat file` 里的模式被当成路径（实测踩过）。
 			out := make([]byte, 0, len(s))
 			out = append(out, '-')
+			noFilename := false
 			for k := 1; k < len(s); k++ {
 				ch := s[k]
 				drop, gerr := gnuOnlyShortFlag(ch)
@@ -172,6 +178,9 @@ func parseGrepArgs(args []string) *grepArgs {
 				case 'c':
 					a.count = true
 					continue
+				case 'h':
+					noFilename = true
+					continue
 				case 'l':
 					a.files = true
 				case 'q':
@@ -182,21 +191,39 @@ func parseGrepArgs(args []string) *grepArgs {
 						hasPatternFlag = true
 					}
 					out = append(out, ch)
-					if k+1 < len(s) {
-						// 值紧跟（-A2）：flag 和值一起出去
-						out = append(out, s[k+1:]...)
-					} else {
+					if k+1 >= len(s) {
 						// 值在下一个参数：先把 flag 落地，再吃值
 						a.forward = append(a.forward, string(out))
 						out = nil
 						takeValue(&i, "")
+						break
 					}
+					if numericShortValue[ch] {
+						// 数值 flag 只吃捆绑里的**数字**（-A2h = -A2 加 h）；
+						// 紧跟非数字则整段是它的值（-Ah → 交给 rg 报
+						// invalid context length，GNU 同款语义），不能反吞下一个参数。
+						start := k
+						for k+1 < len(s) && s[k+1] >= '0' && s[k+1] <= '9' {
+							k++
+							out = append(out, s[k])
+						}
+						if k > start {
+							continue // 值消费完，捆绑剩余仍是 flag
+						}
+						out = append(out, s[k+1:]...)
+						break
+					}
+					// 字符串值 flag（-e pat）：捆绑剩余全是值
+					out = append(out, s[k+1:]...)
 					break
 				}
 				out = append(out, ch)
 			}
 			if len(out) > 1 {
 				a.forward = append(a.forward, string(out))
+			}
+			if noFilename {
+				a.forward = append(a.forward, "--no-filename")
 			}
 
 		default:
@@ -265,7 +292,9 @@ func runGrep(args []string) error {
 		return a.err
 	}
 
-	// 计数/列文件/安静：都不产出可锚定的行，直接透传（保留 rg 的原生行为）。
+	// 列文件 / 安静：都不产出可锚定的行，直接透传（保留 rg 的原生行为）。
+	// 计数（-c）不走这里：rg 见 -c 会绕过 --json，计数由我们自己数（GNU 语义，
+	// 只数命中行），见 emitGrepCount。
 	if a.quiet || a.files {
 		return passthroughGrep(a.raw, a.rgArgs)
 	}
@@ -323,6 +352,9 @@ func runGrep(args []string) error {
 	// 前面所有回退分支都不该被它拖累（也避免无谓地建库）。
 	// -fn 不锚定任何行：连开库都不必，锚点空间不该被没有锚点的调用占住。
 	if noAnchor {
+		if a.json {
+			return emitGrepNoAnchorJSON(os.Stdout, files, res.Cwd)
+		}
 		emitGrepPlain(os.Stdout, files, res.Cwd)
 		return nil
 	}
@@ -336,7 +368,19 @@ func runGrep(args []string) error {
 	if a.count {
 		return emitGrepCount(os.Stdout, c, files, a.pathCount, a.json)
 	}
-	return emitGrepAnchored(os.Stdout, c, files)
+	return emitGrepAnchored(os.Stdout, c, files, a.json)
+}
+
+// emitGrepNoAnchorJSON 是 -fn 形态的 --json：结构与 emitGrepAnchored 的 JSON
+// 一致，只是 hash 恒为空串（没有锚点可给）。
+func emitGrepNoAnchorJSON(w io.Writer, files []hitFile, cwd string) error {
+	out := []grepJSONFile{}
+	for _, f := range files {
+		out = append(out, grepJSONFileOf(f, absPath(f.Path, cwd), nil, nil))
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
 }
 
 // rgBinary 定位可用的 ripgrep。
@@ -384,7 +428,12 @@ type rgEvent struct {
 // hitFile 是一个命中文件。
 type hitFile struct {
 	Path string
+	// Hits 是 match 事件：真正的命中行。-c 计数、"(N matches)" 头只数这些
+	//（GNU grep 的 -c 不数上下文）。
 	Hits []hitLine
+	// Ctx 是 context 事件：-A/-B/-C 产生的上下文行。展示与 serve 都带上，
+	// 但不算命中。
+	Ctx []hitLine
 }
 
 type hitLine struct {
@@ -392,10 +441,43 @@ type hitLine struct {
 	Text string
 }
 
-// parseRJSON 把 rg --json 的事件流折叠成"文件 → 命中行"。
+// displayLines 返回按行号排序的展示行：match 与 context 合并。
+// rg 按行序产出事件、两段各自有序，合并后需重排。
+func (f *hitFile) displayLines() []hitLine {
+	if len(f.Ctx) == 0 {
+		return f.Hits
+	}
+	all := make([]hitLine, 0, len(f.Hits)+len(f.Ctx))
+	all = append(all, f.Hits...)
+	all = append(all, f.Ctx...)
+	sort.Slice(all, func(i, j int) bool { return all[i].Line < all[j].Line })
+	return all
+}
+
+// taggedLine 是带"是否命中"标记的展示行（--json 用）。
+type taggedLine struct {
+	hitLine
+	Match bool
+}
+
+// displayTagged 同 displayLines，但保留 match / context 的区分。
+func (f *hitFile) displayTagged() []taggedLine {
+	out := make([]taggedLine, 0, len(f.Hits)+len(f.Ctx))
+	for _, h := range f.Hits {
+		out = append(out, taggedLine{hitLine: h, Match: true})
+	}
+	for _, h := range f.Ctx {
+		out = append(out, taggedLine{hitLine: h, Match: false})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Line < out[j].Line })
+	return out
+}
+
+// parseRJSON 把 rg --json 的事件流折叠成"文件 → 命中行 + 上下文行"。
 //
-// context 事件（-C/-A/-B 产生）也算命中行：用户要了上下文，
-// 就得把上下文给全，否则 `-C2` 会静默变成"只给命中行"。
+// context 事件（-C/-A/-B 产生）与命中行分开记：展示与 serve 都要带上
+// （用户要了上下文就得给全，否则 `-C2` 会静默变成"只给命中行"），
+// 但 -c 计数与 "(N matches)" 头不能把它们算进去 —— GNU 语义只数命中行。
 func parseRJSON(data []byte) ([]hitFile, error) {
 	var out []hitFile
 	index := map[string]int{}
@@ -425,10 +507,15 @@ func parseRJSON(data []byte) ([]hitFile, error) {
 			index[p] = i
 			out = append(out, hitFile{Path: p})
 		}
-		out[i].Hits = append(out[i].Hits, hitLine{
+		hl := hitLine{
 			Line: *ev.Data.LineNumber,
 			Text: strings.TrimRight(ev.Data.Lines.Text, "\r\n"),
-		})
+		}
+		if ev.Type == "match" {
+			out[i].Hits = append(out[i].Hits, hl)
+		} else {
+			out[i].Ctx = append(out[i].Ctx, hl)
+		}
 	}
 	return out, sc.Err()
 }
@@ -447,16 +534,53 @@ func emitGrepPlain(w io.Writer, files []hitFile, cwd string) {
 		}
 		first = false
 		fmt.Fprintf(&b, "# %s (%s)\n", displayPath(absPath(f.Path, cwd)), matchCount(f.Hits))
-		for _, h := range f.Hits {
+		for _, h := range f.displayLines() {
 			fmt.Fprintf(&b, "%d:%s\n", h.Line, h.Text)
 		}
 	}
 	io.WriteString(w, b.String())
 }
 
+// grepJSONFile 是 grep --json 输出里的一个文件。
+type grepJSONFile struct {
+	Path  string         `json:"path"`
+	Lines []grepJSONLine `json:"lines"`
+}
+
+// grepJSONLine 是一条展示行。Match=false 为 -A/-B/-C 的上下文行；
+// Hash 为空串表示该行不可用于 edit（超长行 / 文件加载失败）。
+type grepJSONLine struct {
+	Line  int    `json:"line"`
+	Hash  string `json:"hash"`
+	Text  string `json:"text"`
+	Match bool   `json:"match"`
+}
+
+// grepJSONFileOf 把一个命中文件摆成 JSON 形态。
+// doc / anchors 为 nil 时（-fn 或加载失败）行文本用 rg 报的、hash 留空。
+func grepJSONFileOf(f hitFile, abs string, doc *docfile.Doc, anchors []string) grepJSONFile {
+	out := grepJSONFile{Path: abs, Lines: []grepJSONLine{}}
+	for _, t := range f.displayTagged() {
+		gl := grepJSONLine{Line: t.Line, Text: t.Text, Match: t.Match}
+		if doc != nil && t.Line >= 1 && t.Line <= len(doc.Lines) {
+			gl.Text = doc.Lines[t.Line-1]
+		}
+		if anchors != nil && t.Line >= 1 && t.Line <= len(anchors) {
+			gl.Hash = anchors[t.Line-1]
+		}
+		if doc != nil && doc.HasLongLine(t.Line) {
+			gl.Hash = ""
+		}
+		out.Lines = append(out.Lines, gl)
+	}
+	return out
+}
+
 // emitGrepAnchored 给每个命中行加锚点，并把命中行写入 served。
-func emitGrepAnchored(w io.Writer, c *Ctx, files []hitFile) error {
+// asJSON 为真时输出 grepJSONFile 数组（结构与文本形态一一对应）。
+func emitGrepAnchored(w io.Writer, c *Ctx, files []hitFile, asJSON bool) error {
 	var b strings.Builder
+	var jout []grepJSONFile
 	first := true
 	for _, f := range files {
 		abs := absPath(f.Path, c.Res.Cwd)
@@ -464,12 +588,16 @@ func emitGrepAnchored(w io.Writer, c *Ctx, files []hitFile) error {
 		if err != nil {
 			// 加载不了（二进制 / 编码识别不了）：仍然把行给出去，
 			// 只是没有锚点 —— 比整条 grep 失败有用。
+			if asJSON {
+				jout = append(jout, grepJSONFileOf(f, abs, nil, nil))
+				continue
+			}
 			if !first {
 				b.WriteString("\n")
 			}
 			first = false
 			fmt.Fprintf(&b, "# %s (%s)\n", displayPath(abs), matchCount(f.Hits))
-			for _, h := range f.Hits {
+			for _, h := range f.displayLines() {
 				fmt.Fprintf(&b, "%d:%s%s%s\n", h.Line, strings.Repeat("~", hashline.HashLen),
 					hashline.Sep, h.Text)
 			}
@@ -481,9 +609,17 @@ func emitGrepAnchored(w io.Writer, c *Ctx, files []hitFile) error {
 		for _, h := range f.Hits {
 			set.Add(h.Line)
 		}
+		for _, h := range f.Ctx {
+			set.Add(h.Line)
+		}
 		if err := c.DB.ServeLines(abs, set, anchors, canons,
 			c.Res.Cfg.Hash.CanonVersion, c.Res.Cfg.Hash.ProbeStride); err != nil {
 			return &Error{Code: ExitInternal, Message: "grep: serve: " + err.Error()}
+		}
+
+		if asJSON {
+			jout = append(jout, grepJSONFileOf(f, abs, doc, anchors))
+			continue
 		}
 
 		if !first {
@@ -491,7 +627,7 @@ func emitGrepAnchored(w io.Writer, c *Ctx, files []hitFile) error {
 		}
 		first = false
 		fmt.Fprintf(&b, "# %s (%s)\n", displayPath(abs), matchCount(f.Hits))
-		for _, h := range f.Hits {
+		for _, h := range f.displayLines() {
 			text := h.Text
 			if h.Line >= 1 && h.Line <= len(doc.Lines) {
 				text = doc.Lines[h.Line-1]
@@ -506,6 +642,14 @@ func emitGrepAnchored(w io.Writer, c *Ctx, files []hitFile) error {
 			fmt.Fprintf(&b, "%d:%s%s%s\n", h.Line, hash, hashline.Sep, text)
 		}
 	}
+	if asJSON {
+		if jout == nil {
+			jout = []grepJSONFile{}
+		}
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(jout)
+	}
 	io.WriteString(w, b.String())
 	return nil
 }
@@ -513,6 +657,7 @@ func emitGrepAnchored(w io.Writer, c *Ctx, files []hitFile) error {
 // emitGrepCount 输出计数（-c）。
 //
 // rg 在 -c 下绕过 --json，所以计数由我们自己数。
+// 只数命中行（f.Hits）—— -A/-B/-C 的上下文行不算，GNU grep 的 -c 语义。
 // 格式与 rg 对齐：单文件只给数字，多文件给 `path:count`。
 func emitGrepCount(w io.Writer, c *Ctx, files []hitFile, pathCount int, asJSON bool) error {
 	single := pathCount == 1 && len(files) == 1

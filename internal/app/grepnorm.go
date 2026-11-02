@@ -2,12 +2,14 @@ package app
 
 import "strings"
 
-// GNU grep 与 rg 的短选项表有两处冲突，凡是可能把参数交给 rg 的路径都要按
+// GNU grep 与 rg 的短选项表有三处冲突，凡是可能把参数交给 rg 的路径都要按
 // 同一规则归一化：
 //
 //	-E / --extended-regexp  吃掉 —— rg 的正则默认就是 ERE；rg 的 -E 是
 //	                        --encoding，原样递过去会报 unknown encoding
 //	-G / --basic-regexp     报错 —— rg 没有 BRE，静默按 ERE 跑会把 a\|b 解错
+//	-h                      翻译成 --no-filename —— GNU 的 -h 是不打印文件名，
+//	                        rg 的 -h 是帮助（裸 `grep -h` 在 runTool 里已是帮助）
 //
 // 冲突也存在于捆绑写法里（-qE、-cE、-nE、-A2E）：GNU grep 允许短选项连写，
 // 必须先拆成单个 flag 再判，否则整串会被 rg 当成 -E 的编码名。
@@ -44,18 +46,25 @@ func gnuOnlyShortFlag(ch byte) (drop bool, err error) {
 // normalizeShortBundle 归一化一个短选项捆绑词（-in、-qE、-A2、-A 2）。
 //
 // 返回归一化后的词（"" 表示整个词都被吃掉，调用方不要传它）、值是否在下一个
-// 参数里，以及错误。值一律不动：-A2 的 2、-eE 的模式 E 都原样保留。
-func normalizeShortBundle(s string) (string, bool, error) {
+// 参数里、捆绑里是否出现过 GNU 的 -h（--no-filename；rg 没有短形式，调用方
+// 要单独补一条长写法），以及错误。值一律不动：-A2 的 2、-eE 的模式 E 都原样保留。
+func normalizeShortBundle(s string) (string, bool, bool, error) {
 	var b strings.Builder
 	b.WriteByte('-')
 	nextIsValue := false
+	noFilename := false
 	for k := 1; k < len(s); k++ {
 		ch := s[k]
 		switch ch {
 		case 'E':
 			continue
 		case 'G':
-			return "", false, errBasicRegexp(false)
+			return "", false, false, errBasicRegexp(false)
+		case 'h':
+			// GNU 的 -h = --no-filename；rg 的 -h 是帮助。值的位置上的 h
+			//（-Ah 的值 "h"、-eE 消费掉的尾巴）到不了这个 case。
+			noFilename = true
+			continue
 		}
 		b.WriteByte(ch)
 		if !rgValueFlagsShort[ch] {
@@ -75,14 +84,17 @@ func normalizeShortBundle(s string) (string, bool, error) {
 			b.WriteByte(s[k])
 		}
 		if k == start {
-			nextIsValue = true // -AE 这种没给数字：值在下一个参数
+			// -Ah / -AE：数值 flag 紧跟非数字 —— GNU 语义里捆绑剩余部分就是
+			// 它的值（rg 会报 invalid context length），不能反过来把下一个
+			// 参数（往往是要搜的模式）当值吞掉。
+			b.WriteString(s[k+1:])
 			break
 		}
 	}
 	if b.Len() == 1 {
-		return "", nextIsValue, nil
+		return "", nextIsValue, noFilename, nil
 	}
-	return b.String(), nextIsValue, nil
+	return b.String(), nextIsValue, noFilename, nil
 }
 
 // rgArgsFor 把一份用户参数改写成"交给 rg 也不会出错"的等价形态，供回退透传用。
@@ -125,12 +137,16 @@ func rgArgsFor(args []string) ([]string, error) {
 				}
 			}
 		case len(s) > 1 && s[0] == '-':
-			norm, nextIsValue, err := normalizeShortBundle(s)
+			norm, nextIsValue, noFilename, err := normalizeShortBundle(s)
 			if err != nil {
 				return nil, err
 			}
 			if norm != "" {
 				out = append(out, norm)
+			}
+			if noFilename {
+				// GNU 的 -h 在 rg 里只有长写法：-h 的词被吃掉后单独补一条。
+				out = append(out, "--no-filename")
 			}
 			if nextIsValue && i+1 < len(args) {
 				i++

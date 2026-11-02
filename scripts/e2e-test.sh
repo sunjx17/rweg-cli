@@ -376,6 +376,20 @@ check "-c 多文件计数" "src/other.ts:1" "$(rsh "$_sb" grep -c hello src/ 2>/
 rcv="$(rsh "$_sb" grep -n zzzznotfound src/ >/dev/null 2>&1; echo $?)"
 check "无匹配 → 1" "1" "$rcv"
 check "-C1 上下文行也带上锚点" "3" "$(rsh "$_sb" grep -C1 world src/app.ts 2>/dev/null | grep -c "$SEP")"
+# -c 的 GNU 语义：只数命中行，-A/-B/-C 的上下文不算；块头同。
+check "-C1 下 -c 只数命中行" "1" "$(rsh "$_sb" grep -c -C1 world src/app.ts 2>/dev/null)"
+contains "命中数头只数命中行" "# src/app.ts (1 match)" \
+	"$(rsh "$_sb" grep -C1 world src/app.ts 2>/dev/null | sed -n 1p)"
+# GNU 的 -h（--no-filename）：带模式/路径时是搜索，不是帮助（rg 的 -h 才是帮助）。
+contains "grep -h pat 是搜索" "1:CTt${SEP}" \
+	"$(rsh "$_sb" grep -h hello src/app.ts 2>/dev/null)"
+out="$(RWEG_RG_MISSING=1 rsh "$_sb" grep -h hello src/app.ts 2>/dev/null)"
+check "回退系统 grep 时 -h 不带文件名前缀" "function hello() {" "$(printf '%s\n' "$out" | sed -n 1p)"
+# --json：锚点路径也要给结构化输出（此前只有 -c 认它）
+js="$(rsh "$_sb" grep --json hello src/app.ts 2>/dev/null)"
+contains "grep --json 有 path" '"path"' "$js"
+contains "grep --json 有锚点" '"hash": "CTt"' "$js"
+contains "grep --json 有命中标记" '"match": true' "$js"
 
 # ─────────────────────────────────────────────────────────────
 section I "编码 / 行尾 / BOM（read 与写回）"
@@ -861,6 +875,57 @@ check "区间外两行不动" "foo
 foo" "$(sed -n 3,4p "$_sb/range.txt")"
 check "行数不变" "4" "$(wc -l < "$_sb/range.txt" | tr -d ' ')"
 
+# --- 多组改动：-c / -cr 可重复，一次调用原子生效（与 edit 的多 -c 同规） ---
+printf 'one\ntwo\nthree\nfour\n' > "$_sb/multi2.txt"
+rsh "$_sb" read -f multi2.txt >/dev/null 2>&1
+k1="$(anchors_at multi2.txt 1:1)"; k1="${k1%,}"
+k3="$(anchors_at multi2.txt 3:3)"; k3="${k3%,}"
+k4="$(anchors_at multi2.txt 4:4)"; k4="${k4%,}"
+out="$(rsh "$_sb" hreplace -f multi2.txt -c "$k1" "one" "1" -cr "$k3:$k4" "t" "T" 2>/dev/null)"
+check "多组 replace 摘要" "replaced ok
+multi2.txt (4 → 4 lines, +2 -2)" "$(printf '%s\n' "$out" | sed -n '1p;$p')"
+check "第一组生效" "1" "$(sed -n 1p "$_sb/multi2.txt")"
+check "第二组区间内命中行生效" "Three" "$(sed -n 3p "$_sb/multi2.txt")"
+check "第二组区间内未命中行不动" "four" "$(sed -n 4p "$_sb/multi2.txt")"
+
+# 区间重叠 → E_OVERLAP，不写盘。
+# ⚠️ 锚点要在**上一步改完之后**现取：line 1/3 已变，旧锚点会先撞 E_UNKNOWN_ANCHOR。
+k1b="$(anchors_at multi2.txt 1:1)"; k1b="${k1b%,}"
+k3b="$(anchors_at multi2.txt 3:3)"; k3b="${k3b%,}"
+k4b="$(anchors_at multi2.txt 4:4)"; k4b="${k4b%,}"
+err="$(rsh "$_sb" hreplace -f multi2.txt -c "$k1b:$k3b" "e" "E" -c "$k3b:$k4b" "o" "0" 2>&1 >/dev/null)"
+contains "区间重叠 → E_OVERLAP" "E_OVERLAP" "$err"
+check "重叠不写盘" "Three" "$(sed -n 3p "$_sb/multi2.txt")"
+
+# 重复 -c 曾被静默覆盖：现在两组都生效
+printf 'aaa\nbbb\n' > "$_sb/two.txt"
+rsh "$_sb" read -f two.txt >/dev/null 2>&1
+t1="$(anchors_at two.txt 1:1)"; t1="${t1%,}"
+t2="$(anchors_at two.txt 2:2)"; t2="${t2%,}"
+rsh "$_sb" hreplace -f two.txt -c "$t1" "aaa" "A" -c "$t2" "bbb" "B" >/dev/null 2>&1
+check "两组 -c 都生效（不静默覆盖）" "A
+B" "$(sed -n 1,2p "$_sb/two.txt")"
+
+# 多组中一组无命中 → E_NO_MATCH，全不写盘（原子）
+printf 'p\nq\n' > "$_sb/atom.txt"
+rsh "$_sb" read -f atom.txt >/dev/null 2>&1
+a1="$(anchors_at atom.txt 1:1)"; a1="${a1%,}"
+a2="$(anchors_at atom.txt 2:2)"; a2="${a2%,}"
+err="$(rsh "$_sb" hreplace -f atom.txt -c "$a1" "p" "P" -c "$a2" "zzznope" "Q" 2>&1 >/dev/null)"
+contains "多组中一组无命中 → E_NO_MATCH" "E_NO_MATCH" "$err"
+check "多组原子：无写盘" "p" "$(sed -n 1p "$_sb/atom.txt")"
+
+# 匹配空串的正则 → E_BAD_REGEX（否则替换文本插满整行）
+printf 'hello\n' > "$_sb/zerom.txt"
+rsh "$_sb" read -f zerom.txt >/dev/null 2>&1
+z1="$(anchors_at zerom.txt 1:1)"; z1="${z1%,}"
+err="$(rsh "$_sb" hreplace -f zerom.txt -cr "$z1" "x*" "Y" 2>&1 >/dev/null)"
+contains "零长匹配正则 → E_BAD_REGEX" "E_BAD_REGEX" "$err"
+check "零长匹配不写盘" "hello" "$(sed -n 1p "$_sb/zerom.txt")"
+# 行尾锚（单个空命中位置）照常可用
+rsh "$_sb" hreplace -f zerom.txt -cr "$z1" '$' '!' >/dev/null 2>&1
+check "行尾锚追加照常" "hello!" "$(sed -n 1p "$_sb/zerom.txt")"
+
 # --- 正则：子匹配展开（$1 / ${name}）---
 #
 # ⚠️ 子匹配紧随字母 / 数字 / 下划线时必须用 ${1}：`$1_` 会被 Go 读成组名 "1_"。
@@ -927,16 +992,18 @@ new_sandbox src
 write_app_ts "$_sb" src/app.ts
 rsh "$_sb" read -f src/app.ts 1:6 >/dev/null 2>&1
 
-err="$(rsh "$_sb" hreplace -f src/app.ts -c nVR "zzzznope" "x" 2>&1 >/dev/null)"
-rcv="$(rsh "$_sb" hreplace -f src/app.ts -c nVR "zzzznope" "x" >/dev/null 2>&1; echo $?)"
+# ⚠️ 与 stale-range 场景同理：出错路径的 stdout/stderr 与退出码在同一次调用里收齐，
+# 不跑第二遍 —— 就算这条错误路径本身无 serve 副作用，也统一按惯例来。
+out="$(rsh "$_sb" hreplace -f src/app.ts -c nVR "zzzznope" "x" 2>&1)"
+rcv=$?
 check "无命中 → 退出码 1" "1" "$rcv"
-contains "无命中 → E_NO_MATCH" "E_NO_MATCH" "$err"
-contains "无命中给出范围" "lines 4-4" "$err"
+contains "无命中 → E_NO_MATCH" "E_NO_MATCH" "$out"
+contains "无命中给出范围" "lines 4-4" "$out"
 
-err="$(rsh "$_sb" hreplace -f src/app.ts -c nVR "const x" "const x" 2>&1 >/dev/null)"
-rcv="$(rsh "$_sb" hreplace -f src/app.ts -c nVR "const x" "const x" >/dev/null 2>&1; echo $?)"
+out="$(rsh "$_sb" hreplace -f src/app.ts -c nVR "const x" "const x" 2>&1)"
+rcv=$?
 check "命中但文本没变 → 1" "1" "$rcv"
-contains "命中但文本没变 → E_NO_CHANGE" "E_NO_CHANGE" "$err"
+contains "命中但文本没变 → E_NO_CHANGE" "E_NO_CHANGE" "$out"
 check "E_NO_MATCH 不写盘" "const x = 1;" "$(sed -n 4p "$_sb/src/app.ts")"
 
 # 锚点形状非法 / 缺 -f / 简写形态 → 用法错误 2
@@ -963,10 +1030,10 @@ check "非法正则 → 2" "2" "$rcv"
 
 # 未读过的文件
 printf 'a\nb\n' > "$_sb/src/never.ts"
-err="$(rsh "$_sb" hreplace -f src/never.ts -c CTt "a" "b" 2>&1 >/dev/null)"
-rcv="$(rsh "$_sb" hreplace -f src/never.ts -c CTt "a" "b" >/dev/null 2>&1; echo $?)"
+out="$(rsh "$_sb" hreplace -f src/never.ts -c CTt "a" "b" 2>&1)"
+rcv=$?
 check "未读过 → 1" "1" "$rcv"
-contains "未读过 → E_NEVER_READ" "E_NEVER_READ" "$err"
+contains "未读过 → E_NEVER_READ" "E_NEVER_READ" "$out"
 
 # 区间里有行被外部改过 → E_STALE_RANGE + 不写盘
 #

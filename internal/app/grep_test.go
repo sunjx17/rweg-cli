@@ -97,6 +97,25 @@ func TestParseGrepArgs(t *testing.T) {
 			name: "--max-count=3", args: []string{"--max-count=3", "hello", "src/"},
 			forward: "--max-count=3 hello src/", hasPath: true, pathCount: 1,
 		},
+		{
+			// GNU 的 -h 是 --no-filename；rg 的 -h 是帮助，必须翻译。
+			name: "-h → --no-filename", args: []string{"-h", "hello", "src/"},
+			forward: "--no-filename hello src/", hasPath: true, pathCount: 1,
+		},
+		{
+			name: "捆绑 -nh", args: []string{"-nh", "hello", "src/"},
+			forward: "-n --no-filename hello src/", hasPath: true, pathCount: 1,
+		},
+		{
+			// -A2h：'h' 在 -A 的数字值之后，仍是 flag 不是值
+			name: "数值值之后的 h 仍是 flag（-A2h）", args: []string{"-A2h", "hello", "src/"},
+			forward: "-A2 --no-filename hello src/", hasPath: true, pathCount: 1,
+		},
+		{
+			// -eh 里的 h 是 -e 的值（模式 "h"），不能翻译
+			name: "值位置上的 h 不动（-eh）", args: []string{"-eh", "src/"},
+			forward: "-eh src/", hasPath: true, pathCount: 1,
+		},
 	}
 
 	for _, tc := range cases {
@@ -120,8 +139,10 @@ func TestParseGrepArgs(t *testing.T) {
 	}
 }
 
-// TestParseRJSONContext 锁死"上下文行也算命中行"：
-// `-C2` 不能被静默降级成"只给命中行"。
+// TestParseRJSONContext 锁死两件事：
+//  1. 上下文行不丢：`-C2` 不能被静默降级成"只给命中行"；
+//  2. 上下文行与命中行分开记：-c 计数与 "(N matches)" 头只数命中行（GNU 语义），
+//     展示时两段按行号合并。
 func TestParseRJSONContext(t *testing.T) {
 	raw := `{"type":"begin","data":{"path":{"text":"a.ts"}}}
 {"type":"match","data":{"path":{"text":"a.ts"},"lines":{"text":"hit\n"},"line_number":3,"absolute_offset":0,"submatches":[]}}
@@ -137,14 +158,23 @@ not-json-at-all
 	if len(files) != 2 {
 		t.Fatalf("want 2 files, got %d: %+v", len(files), files)
 	}
-	if files[0].Path != "a.ts" || len(files[0].Hits) != 2 {
-		t.Fatalf("file 0 = %+v", files[0])
+	if files[0].Path != "a.ts" {
+		t.Fatalf("file 0 path = %q", files[0].Path)
 	}
-	if files[0].Hits[1].Line != 4 || files[0].Hits[1].Text != "ctx" {
-		t.Fatalf("context line lost: %+v", files[0].Hits[1])
+	if len(files[0].Hits) != 1 || files[0].Hits[0].Line != 3 {
+		t.Fatalf("file 0 hits = %+v（应只含 match 事件，供 -c 计数）", files[0].Hits)
+	}
+	if len(files[0].Ctx) != 1 || files[0].Ctx[0].Line != 4 || files[0].Ctx[0].Text != "ctx" {
+		t.Fatalf("file 0 ctx = %+v（上下文行丢了）", files[0].Ctx)
+	}
+	if got := len(files[0].displayLines()); got != 2 {
+		t.Fatalf("displayLines = %d 行，want 2（match + context 合并展示）", got)
 	}
 	if files[1].Path != "b/c.ts" || files[1].Hits[0].Line != 1 {
 		t.Fatalf("file 1 = %+v", files[1])
+	}
+	if got := len(files[1].displayTagged()); got != 1 || !files[1].displayTagged()[0].Match {
+		t.Fatalf("file 1 displayTagged = %+v", files[1].displayTagged())
 	}
 }
 
@@ -210,6 +240,9 @@ func TestRgArgsFor(t *testing.T) {
 		{"-- 之后一律不动", []string{"-e", "pat", "--", "-E"}, "-e pat -- -E"},
 		{"整词被吃掉", []string{"-E"}, ""},
 		{"无关参数原样", []string{"-n", "hello", "src/"}, "-n hello src/"},
+		{"-h 翻译成 --no-filename", []string{"-h", "foo", "src/"}, "--no-filename foo src/"},
+		{"捆绑 -qh", []string{"-qh", "foo"}, "-q --no-filename foo"},
+		{"值位置的 h 不动（-Ah 的值）", []string{"-Ah", "foo"}, "-Ah foo"},
 	}
 	for _, tc := range cases {
 		got, err := rgArgsFor(tc.args)
