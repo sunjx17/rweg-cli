@@ -13,6 +13,13 @@
   校验链、原子写、撤销、served 重建、diff / `--json` / `-q` 输出、编码与行尾保真
   全部复用 `edit` 那条路径，只有"新内容怎么算出来"不同：没变的行不进 `edit.Op`，
   锚点照旧保留。
+  - **`-c` / `-cr` 可重复**：一次调用多组改动，与 `edit` 的多 `-c` 同规 ——
+    全部原子生效，两组区间不许重叠（`E_OVERLAP`）；任何一组零命中 →
+    `E_NO_MATCH`（带 `-c #N` 组号）、命中但没变 → `E_NO_CHANGE`，整单不写盘
+    （此前的重复 `-c` 会静默只留最后一组）。
+  - 匹配空串的正则（`x*`、`(a)?`）被拒（`E_BAD_REGEX`）：它们会把替换文本
+    插进一行里的每个字符之间；`^` / `$` 这类单一空命中位置照常可用。
+  - `--content` 与 `-c` 同义（通用 flag 层早已给它三元 arity，此前却被下游拒掉）。
   - 整段无命中 → `E_NO_MATCH`；命中但算出来的文本与原行相同 → `E_NO_CHANGE`；
     空模式 → `E_BAD_PATTERN`，非法正则 → `E_BAD_REGEX`（退出码 2）。前两种不写盘。
   - `FILE` 只能用 `-f` / `--file` 点名：位置参数已被锚点与两条文本占满，
@@ -35,11 +42,53 @@
   代价不变：同目录的不同终端共用 served 状态。`env.sh` 生成的 ns 仍带
   时刻，同目录的两个终端依旧隔离。
 
+- **`grep` 的 GNU 习惯兼容补齐**：带模式 / 路径的 `-h` 按 GNU 语义翻译成
+  rg 的 `--no-filename`（rg 的 `-h` 是帮助），回退系统 grep 时原样保留；
+  裸 `grep -h` / `grep help` / `grep --help` 才是 rweg 帮助。此前
+  `grep -h pat FILE`、`grep help FILE` 会打印帮助并 exit 0 —— 静默没搜。
+- **`grep -c` 只数命中行**（GNU 语义）：`-A/-B/-C` 的上下文行此前被折进命中数；
+  `(N matches)` 块头同。展示与 serve 仍两段合并。
+- **`grep --json` 在锚点路径生效**：此前只有 `-c` 认它，锚点输出静默忽略。
+  现在锚点 / `-fn` 两条路径都输出 `[{path, lines:[{line, hash, text, match}]}]`，
+  `hash` 空 = 不可用于 edit。
+- **替换 / 插入文本的结尾换行按行结束符处理**（`edit` / `append` / `prepend`）：
+  把 read 输出 / here-doc 原样贴回来不再静默多一个空行；要在末尾补空行就多写
+  一个换行。每行结尾的 `\r` 一并剥掉（CRLF 来源的内容此前会落成 `\r\r\n`）。
+- **纯 CR 行尾（经典 Mac）如实识别**：此前被静默当 LF，编辑后整个文件被
+  重排行尾；现在 read 头部标 `cr`，写回复用 CR。
+- **编码探测按解码结果的字符分布选表**（Big5 → GBK → GB18030 特指优先）：
+  往返一致分不出三张 CJK 表（各自双射，用哪张都能无损往返）—— GBK 文件
+  现在报更精确的 `gbk`，Big5 文件不再被吞成乱码。
+- **`edit` 未编辑旧行的 served 改记当前锚点**：重复内容行被就近配对跨位继承时，
+  旧实现照抄基线位置锚点，下一轮 edit 未动过的行会莫名 `E_STALE_RANGE`
+  （fail-closed 的误拒陷阱）。
+
+### 修复
+
+- `env.restore.sh` 反注册失效（两层都拆不掉）：接管层判据改为源码形状
+  `"$_rweg_core"` + `" 工具名"`（旧判据找 `hread` 字样，aggressive 函数体里
+  根本没有）；cd 判据补上 env.sh 层的 "WARN: do not 'cd' to same destination"。
+  `shell-test.sh` 新增 [9] 反注册一节（此前零覆盖，正是失效漏网的原因）。
+- `env.sh` / `env.aggressive.sh` 的 cd 提示包装：`last__cwd` 改 `local`、
+  `$(pwd)` 加引号（含空格路径不再报 too many arguments）、退出码原样透传、
+  修掉提示里未闭合的引号；退出码与内置 cd 一致。
+- `ServeLines`（read 的落库）包进 `BEGIN IMMEDIATE` 事务：多终端共享
+  `RWEG_NS` 时，两个终端同时 read 同一文件会互相冲掉刚 serve 的行，
+  之后 edit 莫名 `E_STALE_RANGE`。
+- 捆绑数值 flag 只吃数字：`-A2h` = `-A2` 加 `-h`；`-Ah` 这种非数字尾巴按
+  GNU 语义是它的值（交给 rg 报错），不再反吞下一个参数（可能正是要搜的模式）。
+- `writeFileAtomic` 在 Windows 上对 rename 先做有界重试（杀毒 / 索引服务
+  短暂握住目标文件的常见场景），再走"删目标再改名"的破坏性兜底。
+- `edit` / `replace` 落盘后的库写失败：错误明确"文件已写盘"并指路 read 重建
+  基线（此前报 `edit: persist served`，读错误方会误以为没写）。
+- `E_TOO_MANY` 提示按工具分岔：replace 说收窄区间而非"拆成几次 edit"。
+- `Home()` 的 `$RWEG_HOME` 支持 `/tmp` 类 MSYS 挂载点（cygpath 兜底）。
+
 ### 文档
 
-- README：新增 `replace` 一节；工具数、装载说明、撤销的 kind 列表与测验数字
-  对齐当前套件；namespace 一节补充分派生与确定性派生的区别。
-- `core-rweg prompt`、各工具 `-h` 同步到 `replace`。
+- README：新增 `replace` 多组改动与 grep GNU 兼容一节；装载说明（cd 包装 /
+  restore 判据）对齐当前脚本；测验数字对齐当前套件。
+- `core-rweg prompt`、各工具 `-h` 同步到上述全部行为。
 
 ## v0.2-alpha
 

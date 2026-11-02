@@ -110,7 +110,7 @@ $ unset RWEG_PIN_CONFIG                      # 回到"每次按 cwd 现找"
 
 ## 工具
 
-八个工具与 `core-rweg` 及其子命令皆认 `-h` / `--help` / `help`：`read -h`、`replace -h`、`grep -h`、`core-rweg cfg -h` 打的都是 rweg 自己的用法（`grep -h` 不再落到 ripgrep 的手册）。下文用接管后的短名 `read` / `write` / `edit` / `replace` / `grep` / `undo` / `append` / `prepend`；非侵入模式下这四个与 `grep` 写作 `hread` / `hwrite` / `hedit` / `hreplace` / `hgrep`（`replace` 不占系统那个名字 —— Windows 自带 `System32\replace.exe`，故它只有 `h*` 形态），`undo` / `append` / `prepend` 两种模式同名，参数与输出完全一致。给 Agent 的完整约定：`core-rweg prompt`。
+八个工具与 `core-rweg` 及其子命令皆认 `-h` / `--help` / `help`：`read -h`、`replace -h`、`grep -h`、`core-rweg cfg -h` 打的都是 rweg 自己的用法。grep 是唯一例外：只有裸 `grep -h` / `grep help` / `grep --help` 是帮助 —— 带模式 / 路径的 `grep -h` 按 GNU 语义是 `--no-filename`，照样搜索（rg 的 `-h` 是帮助，转发前会翻译成长写法）。下文用接管后的短名 `read` / `write` / `edit` / `replace` / `grep` / `undo` / `append` / `prepend`；非侵入模式下这四个与 `grep` 写作 `hread` / `hwrite` / `hedit` / `hreplace` / `hgrep`（`replace` 不占系统那个名字 —— Windows 自带 `System32\replace.exe`，故它只有 `h*` 形态），`undo` / `append` / `prepend` 两种模式同名，参数与输出完全一致。给 Agent 的完整约定：`core-rweg prompt`。
 
 ### 无锚形态 `-fn`
 
@@ -175,7 +175,7 @@ $ read -f src/app.ts 1:3 5:6   # 两块；第 4 行未 serve
 | `-q` / `--quiet` | 去 `# 路径 (行数)` 头部 |
 | `-v` / `--verbose` | 配置诊断走 **stderr**；stdout 唯锚点内容 |
 | `--encoding` | 强制编码：`utf-8` `gb18030` `gbk` `big5` `utf-16le` `utf-16be` |
-| `--no-serve` | 只读不建基线 |
+| `--no-serve` | 只读不记：锚点照常输出但不进 served（不能直接拿去 edit） |
 
 边界皆有处置：CRLF / LF / CR / 混合行尾、UTF-8 BOM、UTF-16 BOM、NUL 二进制（报 `E_NOT_TEXT` 与偏移）、GBK 系自动探测、空文件、目录、行数超限（`truncated` 标记）、单行超长（锚点位置示 `~~~`；锚点需完整行）。
 
@@ -193,6 +193,8 @@ edit -f FILE -c FROM:TO "lines" [-c FROM:TO "lines" ...]
 - 省略 `:TO` 等价于 `FROM:FROM`（改单行）
 - 替换文本里的分行必须是**真换行**（`$'a\nb'`、here-doc，或从命令替换来）；
   写成 `\n` 两个字符只会原样插入这两个字符
+- 结尾一个换行按**行结束符**处理，不会多出一行；要在末尾补空行就多写一个
+  （`"a\n\n"` = `"a"` 加一个空行）—— 把 read 输出 / here-doc 原样贴回来正合适
 - `""` 表示删除该区间
 - 一次调用的多组改动**原子生效**：任一失败，则文件与库皆不动
 - 改动前的内容进撤销栈，改错了可 `undo` 退回一步
@@ -243,8 +245,8 @@ AU6│}
 ### `replace` —— 行内子串 / 正则替换
 
 ```
-replace -f FILE -c  ANCHOR OLDSTR "REPLACEMENT"
-replace -f FILE -cr ANCHOR REGEX  "REPLACEMENT"
+replace -f FILE -c  ANCHOR OLDSTR "REPLACEMENT" [-c ANCHOR OLDSTR "REPLACEMENT" ...]
+replace -f FILE -cr ANCHOR REGEX  "REPLACEMENT" [-cr ANCHOR REGEX "REPLACEMENT" ...]
 ```
 
 在 `ANCHOR` 圈定的行内做替换，其余行不动。`ANCHOR` 是单行锚（`CTt`）或一个区间（`CTt:AU6`，含首尾）。`FILE` 必须用 `-f` 点名：本工具的位置参数是锚点与两条文本，故不做「`FILE` 放最前」的简写。
@@ -252,8 +254,12 @@ replace -f FILE -cr ANCHOR REGEX  "REPLACEMENT"
 - `-c` 精确子串：每一处 `OLDSTR`（非正则，含 `-` / `(` 等一律按字面）换成 `REPLACEMENT`
 - `-cr` 正则（Go / RE2）：每一处匹配换成 `REPLACEMENT`，支持子匹配 `$1` / `${name}`。
   后跟字母 / 数字 / 下划线时括号不能省 —— `$1_` 会被读成组名 `1_`（空串）
+- `-c` / `-cr` **可重复**：一次调用多组改动，与 `edit` 的多 `-c` 同规 ——
+  全部原子生效（任一组校验失败则什么都不写），两组的区间不许重叠（`E_OVERLAP`）
 - 匹配与替换都是**逐行**的：模式不跨行，一行里命中几处就换几处
 - `""` 作替换文本 = 删掉匹配；整行命中则得到一个空行（不是删行）
+- 匹配空串的正则（`x*`、`(a)?`）被拒（`E_BAD_REGEX`）—— 它们会把替换文本
+  插进一行里的每个字符之间；`^` / `$` 这类只有一个空命中位置的不受影响
 - 锚点须来自本终端的 `read` / `grep`，与 `edit` 同一套校验链（含区间逐行比对基线）
 
 ```bash
@@ -268,9 +274,10 @@ replaced ok
 src/app.ts (6 → 6 lines, +1 -1)
 
 $ replace -f src/app.ts -cr EPx 'x = (\d+);' 'x = ${1}0;'
+$ replace -f src/app.ts -c nVR "x = 42;" "x = 43;" -c yAZ "= 2;" "= 3;"   # 多组改动
 ```
 
-不改动的行不进 `edit.Op`，所以锚点照旧保留、diff 里也只出现真正变了的行。整个区间没有一处命中 → `E_NO_MATCH`；命中了但算出来的文本与原行相同 → `E_NO_CHANGE`；两者都不写盘。输出、`--json`、`-q`、撤销、编码 / 行尾 / BOM 保真与 `edit` 完全一致（`undo` 里记的 kind 是 `replace`）。
+不改动的行不进 `edit.Op`，所以锚点照旧保留、diff 里也只出现真正变了的行。任何一组区间没有一处命中 → `E_NO_MATCH`（多组时消息带 `-c #N` 组号）；命中了但算出来的文本与原行相同 → `E_NO_CHANGE`；两者都不写盘。输出、`--json`、`-q`、撤销、编码 / 行尾 / BOM 保真与 `edit` 完全一致（`undo` 里记的 kind 是 `replace`）。
 
 ### `append` / `prepend` —— 单锚点插行
 
@@ -355,10 +362,11 @@ src/app.ts (6 → 6 lines, +1 -1)
 | rg 退出码 1（无匹配） | 原样返回 1 |
 | rg 退出码 ≥2（自报错） | 透传 stderr 与退出码 |
 | `-q` / `-l` | 直接透传 |
-| `-c` / `--count` | 自数（rg 见 `-c` 会绕 `--json`）：单文件给数字，多文件给 `path:count` |
+| `-c` / `--count` | 自数（rg 见 `-c` 会绕 `--json`）：GNU 语义，只数命中行，`-A/-B/-C` 的上下文不算；单文件给数字，多文件给 `path:count` |
 | `-E` / `--extended-regexp` | 吃掉：rg 的正则默认就是 ERE（rg 的 `-E` 是 `--encoding`） |
 | `-G` / `--basic-regexp` | 明确报错（退出码 2）：rg 没有 BRE，不静默改语义 |
-| 组合短选项（`-qE` / `-cE` / `-nE` / `-A2E`） | 拆成单个 flag 再判，`-E` 照吃、`-G` 照报错；带值的 flag（`-A2`、`-e pat`）里的值不动 |
+| `-h` | GNU 的 `--no-filename`：翻译成 rg 的长写法（rg 的 `-h` 是帮助）；裸 `grep -h` / `grep help` 仍是本帮助。回退系统 grep 时 `-h` 原样保留 |
+| 组合短选项（`-qE` / `-cE` / `-nE` / `-A2E`） | 拆成单个 flag 再判，`-E` 照吃、`-G` 照报错；数值 flag 只吃捆绑里的数字（`-A2h` = `-A2` 加 `-h`），紧跟非数字整段按值交给 rg 报错 |
 
 透传时按目标换参数：交给系统 grep 的那份保留 `-E`（grep 要靠它才是 ERE），交给 rg 的那份已把 `-E` / `--json` 摘掉（rg 的 `-E` 是 `--encoding`）。
 
@@ -533,8 +541,8 @@ core-rweg doctor      # 环境自检（路径 / 配置 / 库 / rg / 自检向量
 │   ├── env.sh              非侵入入口：h* 名字
 │   ├── env.aggressive.sh   侵入入口：同名接管 + cd 提示
 │   ├── env.restore.sh      反注册：source 它恢复内置
-│   ├── shell-test.sh       shell 层验收 72 项
-│   └── e2e-test.sh         e2e 263 项
+│   ├── shell-test.sh       shell 层验收 84 项
+│   └── e2e-test.sh         e2e 288 项
 ├── dist-home/rweg.toml     安装级配置模板
 ├── examples/project-rweg.toml  项目级配置模板
 ├── rweg.toml               本仓库配置
@@ -544,9 +552,9 @@ core-rweg doctor      # 环境自检（路径 / 配置 / 库 / rg / 自检向量
 ### 测验
 
 ```bash
-go test ./internal/...        # 231 个用例（199 个测试函数）
-./scripts/shell-test.sh       # 72 项：builtin 覆盖 / source 输出 / PATH / 幂等 / 配置钉住 / 退出码
-./scripts/e2e-test.sh         # 263 项：锚点稳定性 / 校验链 / 原子性 / 编码 / diff 形态 / replace / 简写 / undo / -h / prompt
+go test ./internal/...        # 264 个用例（209 个测试函数）
+./scripts/shell-test.sh       # 84 项：builtin 覆盖 / source 输出 / PATH / 幂等 / 配置钉住 / 退出码 / 反注册
+./scripts/e2e-test.sh         # 288 项：锚点稳定性 / 校验链 / 原子性 / 编码 / diff 形态 / replace（含多组改动）/ 简写 / undo / -h / prompt
 ```
 
 二者都真跑已装的 `$RWEG_HOME`，故改完先 `./scripts/build.sh && ./scripts/install.sh`。`build.sh` 与 `e2e-test.sh` 会把自己算出的路径经 `cygpath` 交给原生 `go`/`core-rweg.exe`（见其中 `native()`）：`MSYS_NO_PATHCONV=1` 的 shell（dsh 等 agent shell）里，`go build -o /c/...` 会写到 `C:\c\...`，dist 里留旧货 —— 表现为"改了代码、编译也过了，跑起来还是老行为"。

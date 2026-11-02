@@ -204,6 +204,8 @@ RANGE := N            单行
 不给 RANGE 时默认读整个文件（超过 max_lines 截断并标 truncated；单行超过
 max_line_bytes 的行只给标记，不给锚点）。
 输出每行 ` + hashline.Sep + `内容。读到的行记入 served，锚点可直接用于 edit。
+--no-serve 只读不记：锚点照常输出，但不进 served —— 拿它们 edit 会报
+E_NEVER_READ / E_STALE_RANGE（用于不想动基线的一次性查看）。
 -fn FILE（等价 --no-anchor FILE）只要内容：结构相同但不带行锚，也不生成锚点，
 读到的行不进 served（不能直接拿去 edit）。
 绝对路径两种形态都认：C:/x/f.txt 与 /c/x/f.txt，MSYS 的 /tmp 也认。
@@ -232,6 +234,8 @@ edit -f FILE -c FROM:TO CONTENT [-c FROM:TO CONTENT ...]
 FILE 放在最前面时可以省掉 -f。FROM:TO 省略 :TO 时等价于 FROM:FROM。
 CONTENT 里的分行必须是**真换行**（$'a\nb'、here-doc，或从 stdin 喂）；
 写成 \n 两个字符只会原样插入这两个字符。"" 表示删除该区间。
+结尾一个换行按**行结束符**处理，不会多出一行；要在末尾补空行就多写一个
+（"a\n\n" = "a" 加一个空行）。把 read 输出 / here-doc 原样贴回来正合适。
 一次调用的多组改动原子生效：任一失败则文件与库都不动。
 每次 edit 前的内容进撤销栈，undo 可退回一步（编码 / 行尾一并回来）。
 
@@ -347,7 +351,8 @@ ANCHOR 是单行锚点（3 个 base62 字符），必须来自本终端的 read 
 位置只由这**单个锚点**决定，文件必须点名 —— 工具不做跨文件反查。
 
 CONTENT 里的分行必须是**真换行**（$'a\nb'、here-doc、命令替换），与 edit 的
-替换文本同源；"" 表示插入一个空行。
+替换文本同源；"" 表示插入一个空行。结尾一个换行按行结束符处理，不会
+多出一行（同 edit）。
 被锚定的那一行原样保留、锚点不变：实现上就是"把它替换成它自己 + 新行"，
 所以校验链、undo、served 重建与 edit 完全一致（锚点过期同样报 E_STALE_*）。
 CONTENT 恰好是 -v / -q / -h / -f / -c / --json 这类 rweg 认得的 flag 时，

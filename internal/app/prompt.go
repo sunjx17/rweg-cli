@@ -54,15 +54,22 @@ const agentPrompt = `# rweg 工具约定（贴进 Agent 的 system prompt）
           RANGE := N（单行）| N:M（闭区间）| N-（N 至文末）| -M（文首至 M）
           不给 RANGE 即读全文；多范围可乱序、可重叠，输出按行号合并排序。
           一次全读上限 max_lines = 20000 行，超出标 truncated（只影响这一次输出）。
+          --no-serve 只读不记：锚点照常输出但不进基线，不能直接拿去 edit。
     edit  FILE FROM:TO "lines" [FROM:TO "lines" ...]
           FROM:TO 省略 :TO 即 FROM:FROM。
           CONTENT 里的换行必须是**真换行**：$'a\nb'、here-doc，或从 stdin 喂；
           写成 \n 两个字符只会原样插入这两个字符。"" 删除该区间。
-    replace -f FILE -c  ANCHOR OLDSTR "NEW"   行内精确子串替换（逐行，命中的都换）
-    replace -f FILE -cr ANCHOR REGEX  "NEW"   同上但用 Go 正则；子匹配写 ${1} / ${name}
+          结尾一个换行是行结束符，不会多出一行（把 read 输出 / here-doc
+          原样贴回来正合适）；要在末尾补空行就多写一个换行。
+    replace -f FILE -c  ANCHOR OLDSTR "NEW" [-c ANCHOR OLDSTR "NEW" ...]
+    replace -f FILE -cr ANCHOR REGEX  "NEW" [-cr ANCHOR REGEX "NEW" ...]
+          行内替换（逐行，命中的都换）：-c 精确子串，-cr Go 正则，子匹配写 ${1} / ${name}。
+          -c / -cr 可重复：一次调用多组改动，全部原子生效；区间不许重叠（E_OVERLAP）。
           ANCHOR 是单行锚或 FROM:TO 区间；模式不跨行；"" 删除匹配。
           ${1} 的括号不能省：$1_ 会被读成组名 "1_"。
-          FILE 必须 -f 点名（位置参数是锚点与两条文本）。未命中报 E_NO_MATCH、
+          匹配空串的正则（x*、(a)?）会拒（E_BAD_REGEX）—— 它们会把替换文本
+          插进每个字符之间；^ / $ 照常可用。
+          FILE 必须 -f 点名（位置参数是锚点与两条文本）。任何一组未命中报 E_NO_MATCH、
           命中但文本没变报 E_NO_CHANGE，都不写盘。
     write FILE "content"
           不给 content 则从 stdin 读全文；整文件替换；目录必须已存在。
@@ -85,7 +92,8 @@ write 成功时只回一行确认、不回显内容，grep 只给「行号:内�
 结果接进管道时用它；这些行不记入 served，也就不能直接拿去 edit。
 
 帮助：read -h / write -h / edit -h / replace -h / grep -h / undo -h / append -h /
-prepend -h / core-rweg -h。
+prepend -h / core-rweg -h（grep 例外：带模式/路径的 grep -h 按 GNU 语义是
+--no-filename，照样搜索；裸 grep -h / grep help / grep --help 才是帮助）。
 
 ## 输出形态
 
@@ -153,6 +161,8 @@ edit 报错时回传的当前区间仍用「锚点│内容」形态，且这些
   grep -E / --extended-regexp 被吃掉（rg 默认就是 ERE；rg 的 -E 是 --encoding，
   编码请写 --encoding）；-G / --basic-regexp 明确报错，rg 没有 BRE。组合短
   选项同理：-qE / -cE / -nE 里的 E 一样吃掉（-A2E 这种带值的也拆得对）。
+  -h（GNU --no-filename）翻译成 rg 的 --no-filename；-c 只数命中行，
+  -A/-B/-C 的上下文不算。
 - read FILE 简写认「存在的文件」：notes、Makefile 这类无扩展名的照读；裸词
   没有同名文件时才按 bash 内置的变量名语义处理。
 - 走 bash 内置的那些写法（read line、read -r line）最多等 stdin 5 秒
