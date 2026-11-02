@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -137,6 +138,12 @@ func (d *DB) GetServed(path string) (*Served, error) {
 //
 // anchors 必须是**全文件**的锚点数组（长度 == 文件行数），
 // 本方法只挑 lines 里的那些写进 served。
+//
+// 读旧记录 → 合并 → 写回必须是**一个原子事务**：项目明确支持多终端共享
+// RWEG_NS，busy_timeout 只串行化单条语句，罩不住这个读改写窗口 ——
+// 两个终端同时 read 同一文件，可能各自读到对方写入前的旧记录，
+// 后写的一方把先写的行冲掉（丢行），之后 edit 莫名 E_STALE_RANGE。
+// BEGIN IMMEDIATE 让第二个事务在 BEGIN 时就等写锁，而不是等到写语句。
 func (d *DB) ServeLines(path string, lines *ranges.Set, anchors, canons []string, canonVer, stride int) error {
 	if lines.Count() == 0 {
 		return nil
@@ -144,20 +151,53 @@ func (d *DB) ServeLines(path string, lines *ranges.Set, anchors, canons []string
 	key := NormalizePath(path)
 	now := time.Now().Unix()
 
-	// 已有记录则合并（保留之前 serve 过、这次没读的行）
-	prev, err := d.GetServed(key)
+	ctx := context.Background()
+	conn, err := d.sql.Conn(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("serve %s: %w", path, err)
 	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return fmt.Errorf("serve %s: begin: %w", path, err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(ctx, `ROLLBACK`)
+		}
+	}()
+
+	// 已有记录则合并（保留之前 serve 过、这次没读的行）。
+	// 同一事务里读，别的事务插不进来。
+	var prevRaw, prevCanons sql.NullString
+	err = conn.QueryRowContext(ctx,
+		`SELECT hashes, canons FROM served WHERE path = ?`, key).
+		Scan(&prevRaw, &prevCanons)
+	switch {
+	case err == sql.ErrNoRows:
+		// 从未 serve 过
+	case err != nil:
+		return fmt.Errorf("serve %s: read prev: %w", path, err)
+	}
+
 	out := make([]string, len(anchors))
-	var outCanon []string
-	if prev != nil && len(prev.Hashes) == len(anchors) {
-		copy(out, prev.Hashes)
-		outCanon = make([]string, len(anchors))
-		copy(outCanon, prev.Canons)
-	} else {
-		// 行数变了（文件被外部改过）→ 旧记录失效，从头来
-		outCanon = make([]string, len(anchors))
+	outCanon := make([]string, len(anchors))
+	if err == nil {
+		// 行数没变（文件未被外部改过）才合并，否则旧记录失效，从头来
+		var ph, pc []string
+		if jerr := json.Unmarshal([]byte(prevRaw.String), &ph); jerr != nil {
+			return fmt.Errorf("serve %s: decode served: %w", path, jerr)
+		}
+		if len(ph) == len(anchors) {
+			copy(out, ph)
+			if prevCanons.Valid && prevCanons.String != "" {
+				if jerr := json.Unmarshal([]byte(prevCanons.String), &pc); jerr != nil {
+					return fmt.Errorf("serve %s: decode canons: %w", path, jerr)
+				}
+				copy(outCanon, pc)
+			}
+		}
 	}
 
 	for line := 1; line <= len(anchors); line++ {
@@ -179,7 +219,7 @@ func (d *DB) ServeLines(path string, lines *ranges.Set, anchors, canons []string
 		return fmt.Errorf("encode canons: %w", err)
 	}
 
-	_, err = d.sql.Exec(
+	if _, err := conn.ExecContext(ctx,
 		`INSERT INTO served (path, hashes, canons, line_count, canon_ver, stride, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(path) DO UPDATE SET
@@ -189,14 +229,18 @@ func (d *DB) ServeLines(path string, lines *ranges.Set, anchors, canons []string
 		   canon_ver = excluded.canon_ver,
 		   stride = excluded.stride,
 		   updated_at = excluded.updated_at`,
-		key, string(hb), string(cb), len(anchors), canonVer, stride, now)
-	if err != nil {
+		key, string(hb), string(cb), len(anchors), canonVer, stride, now); err != nil {
 		return fmt.Errorf("serve %s: %w", path, err)
 	}
 
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return fmt.Errorf("serve %s: commit: %w", path, err)
+	}
+	committed = true
+
 	// 刻意**不在这里**写 snapshot 缓存。
 	// snapshot 的键是「行内容指纹」，只有调用方才知道原始行内容；
-	// 这里拿到的是锚点数组，用它算指纹会与调用方算出���键不一致，
+	// 这里拿到的是锚点数组，用它算指纹会与调用方算出的键不一致，
 	// 结果是同一份内容在 snapshot 表里出现两行。
 	// 缓存写入由调用方用 PutSnapshotByFingerprint 负责。
 	return nil

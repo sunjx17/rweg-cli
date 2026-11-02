@@ -533,3 +533,49 @@ func TestDemoAnchorsMatchReference(t *testing.T) {
 		}
 	}
 }
+
+// 并发 ServeLines 不得互相冲掉对方的行。
+//
+// 多终端共享 RWEG_NS 是明确支持的用法；此前的"GetServed → 合并 → 写回"
+// 是非原子的读改写，两个终端同时 read 同一文件时，后写的一方会把先写方
+// 刚 serve 的行冲掉 —— 之后 edit 那些行会莫名 E_STALE_RANGE。
+// BEGIN IMMEDIATE 把读改写包成原子事务后，两组行都必须活下来。
+func TestServeLinesConcurrentMerge(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "ns1.db")
+	dbA, err := Open(p, "ns1", testCfg())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbA.Close()
+	dbB, err := Open(p, "ns1", testCfg())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbB.Close()
+
+	const n = 6
+	setA := serveSet(n, 1, 3)
+	setB := serveSet(n, 4, 6)
+
+	errs := make(chan error, 2)
+	go func() { errs <- dbA.ServeLines("a.ts", setA, demoAnchors, demoCanons, 2, 3907) }()
+	go func() { errs <- dbB.ServeLines("a.ts", setB, demoAnchors, demoCanons, 2, 3907) }()
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("ServeLines: %v", err)
+		}
+	}
+
+	sv, err := dbA.GetServed("a.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sv == nil {
+		t.Fatal("served record missing")
+	}
+	for i, h := range demoAnchors {
+		if sv.Hashes[i] != h {
+			t.Fatalf("line %d: hash %q, want %q（并发合并丢了行）", i+1, sv.Hashes[i], h)
+		}
+	}
+}
