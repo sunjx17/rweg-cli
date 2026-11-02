@@ -169,10 +169,12 @@ func Default() Config {
 }
 
 // Home 返回安装目录：$RWEG_HOME，缺省 ~/.rweg。
-// $RWEG_HOME 允许写 Git Bash 的 /c/... 形态（见 NativePath）。
+// $RWEG_HOME 允许写 Git Bash 的 /c/... 形态（见 NativePath）；
+// /tmp 这类 MSYS 挂载点映射到哪只有 cygpath 知道，走 ResolvePath 兜底
+// （否则 filepath.Join 会拼出当前盘根下的 C:\tmp\...）。
 func Home() string {
 	if h := os.Getenv("RWEG_HOME"); h != "" {
-		return NativePath(h)
+		return ResolvePath(h)
 	}
 	return filepath.Join(userHome(), DefaultHome)
 }

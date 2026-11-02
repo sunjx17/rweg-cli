@@ -172,23 +172,6 @@ func sourceLabel(level int) string {
 	return fmt.Sprintf("RWEG_WALKUP+%d", level)
 }
 
-// pathDepth 返回 from 到 to 之间隔了几级。
-func pathDepth(from, to string) int {
-	f, err := filepath.Abs(from)
-	if err != nil {
-		f = from
-	}
-	t, err := filepath.Abs(to)
-	if err != nil {
-		t = to
-	}
-	depth := 0
-	for cur := f; cur != t && cur != filepath.Dir(cur); cur = filepath.Dir(cur) {
-		depth++
-	}
-	return depth
-}
-
 // apply 读配置文件并合并到默认值上。
 func apply(r Resolved, path, source string) Resolved {
 	r.Path = path
