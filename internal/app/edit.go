@@ -205,8 +205,14 @@ func runEdit(c *Ctx, args []string) error {
 //  2. 全部通过 → 一次 MapStable 重算 → 单次原子写 → 单事务写库
 func applyEdit(c *Ctx, file string, ops []edit.Op, verb string) error {
 	if n := c.Res.Cfg.Edit.MaxChanges; n > 0 && len(ops) > n {
-		return UsageErr("E_TOO_MANY  %d changes exceed [edit].max_changes = %d", len(ops), n).
-			WithHint("split into several edit calls")
+		e := UsageErr("E_TOO_MANY  %d changes exceed [edit].max_changes = %d", len(ops), n)
+		if c.Tool == ToolReplace {
+			// replace 的改动数来自区间宽度，拆调用没用 —— 该收窄的是区间。
+			e.Hint = "narrow the -c range(s), or raise [edit].max_changes in rweg.toml"
+		} else {
+			e.Hint = "split into several edit calls"
+		}
+		return e
 	}
 
 	doc, err := docfile.Load(file, docfile.Options{
@@ -275,17 +281,27 @@ func applyEdit(c *Ctx, file string, ops []edit.Op, verb string) error {
 	recordUndo(c, doc.Path, true, string(c.Tool), pre, preTooBig)
 
 	// 写库：served 整份替换（行号会位移）+ retired 追加。
+	//
+	// ⚠️ 走到这里文件**已经落盘**：库写失败时错误必须说清这一点，
+	// 否则读错误的一方会以为文件没动过（served 基线也还是旧的，
+	// read -f 一遍即可重建；undo 的前像也已记录，仍可退回）。
 	canonVer := c.Res.Cfg.Hash.CanonVersion
 	if err := c.DB.PutServed(doc.Path, res.Served, res.Canons, canonVer, c.Res.Cfg.Hash.ProbeStride); err != nil {
-		return &Error{Code: ExitInternal, Message: "edit: persist served: " + err.Error()}
+		return &Error{Code: ExitInternal, Message: string(c.Tool) + ": persist served: " + err.Error(),
+			Hint: "the file WAS already written to disk; run read -f " + displayPath(doc.Path) +
+				" to rebuild the served anchors (undo still works)"}
 	}
 	if err := c.DB.Retire(doc.Path, res.Retire); err != nil {
-		return &Error{Code: ExitInternal, Message: "edit: persist retired: " + err.Error()}
+		return &Error{Code: ExitInternal, Message: string(c.Tool) + ": persist retired: " + err.Error(),
+			Hint: "the file WAS already written to disk; run read -f " + displayPath(doc.Path) +
+				" to rebuild the served anchors (undo still works)"}
 	}
 	// 新内容的锚点顺手回填缓存（下次 read 直接命中）。
 	fp := store.ContentFingerprint(res.Lines)
 	if err := c.DB.PutSnapshotByFingerprint(doc.Path, res.Hashes, fp, canonVer); err != nil {
-		return &Error{Code: ExitInternal, Message: "edit: cache snapshot: " + err.Error()}
+		return &Error{Code: ExitInternal, Message: string(c.Tool) + ": cache snapshot: " + err.Error(),
+			Hint: "the file WAS already written to disk and the anchors are served; " +
+				"only the read cache failed (harmless, next read recomputes)"}
 	}
 
 	if c.JSON {
