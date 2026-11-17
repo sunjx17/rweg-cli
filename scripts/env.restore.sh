@@ -2,19 +2,20 @@
 # rweg env.restore.sh — 反注册 env.sh 装进当前 shell 的一切。
 #
 # 用法（**必须 source**：要改的是当前 shell 的函数表）：
-#     source ~/.rweg/scripts/env.restore.sh          # 只拆同名命令（read / write / edit / grep）
-#     source ~/.rweg/scripts/env.restore.sh --all    # h* 层与 PATH / ns / 配置钉住也一并拆
+#     source ~/.rweg/scripts/env.restore.sh          # 拆掉 env.sh 装的函数（h* 与 undo / append / prepend / core-rweg）
+#     source ~/.rweg/scripts/env.restore.sh --all    # PATH / ns / 配置钉住也一并还原，回到"从未 source 过"
 #
-# 只拆 rweg 自己装的，判据两条同时成立：同名的 h* 函数在（hread / hwrite / …），
-# 且函数体里出现 `"$_rweg_core" <工具名>` 转发（转发函数的真实形状）。
-# 别的来源的同名函数原样保留，并在 stderr 说一声是谁占着。
-# `unset -f` 会连带清掉 BASH_FUNC_* 导出，
-# 所以从那之后起的子进程也回到内置。
+# env.sh 只装一层，且**不接管任何已有名字** —— read / write / edit / grep / cd
+# 从头到尾没被碰过，反注册自然也不必碰它们：你自带的同名函数一律原样保留。
 #
-# --all 还会：unset hread / hwrite / hedit / hreplace / hgrep / hundo / happend / hprepend /
-# hundo_last_edit / undo / append / prepend / core-rweg 十二个函数、把 $RWEG_BIN 从 PATH 里摘掉、
-# unset RWEG_NS /
-# RWEG_PIN_CONFIG / RWEG_HOME / RWEG_BIN / _rweg_core —— 即回到"从未 source 过"。
+# 只拆 rweg 自己装的：判据是**源码形状**（declare -f 打印的就是源码，变量不展开）
+# —— 函数体里出现 `"$_rweg_core"` 才是 rweg 的转发函数。刻意写成带引号的字面量
+# 而非依赖 $_rweg_core 的**值**：值在这一层可能为空，空值会让模式退化成 *" 空"*
+# 之类的宽匹配，把恰好含该字样的别的函数误拆。
+# `unset -f` 会连带清掉 BASH_FUNC_* 导出，从那之后起的子进程也拿不到这些函数。
+#
+# --all 还会：把 $RWEG_BIN 从 PATH 里摘掉、unset RWEG_NS / RWEG_PIN_CONFIG /
+# RWEG_HOME / RWEG_BIN / _rweg_core。
 # 注意 RWEG_NS 一丢，本终端已 serve 的锚点就用不了了（重 source 会另起一个 ns）。
 #
 # 幂等：没装过也能跑。成功时静默；RWEG_VERBOSE=1 时往 stderr 打一行结果。
@@ -38,33 +39,22 @@ esac
 _rweg_dropped=""
 _rweg_kept=""
 
-# --- 1. 同名命令层（env.sh export -f 出去的 read / write / edit / grep）：带 rweg 痕迹的才拆 ---
-#      undo / append / prepend 是 env.sh 装的不重名函数，不在这一层，--all 才拆。
+# --- 1. env.sh 装的那层：带 rweg 痕迹的才拆，别人的同名函数原样留着 ---
 #
-# 判据用**源码形状**（declare -f 打印的就是源码，变量不展开）：
-# `"$_rweg_core"` + `" <工具名>"` 两段同时出现即 rweg 的转发函数。
-# 刻意写成带引号的字面量而非依赖 $_rweg_core 的**值**——
-# 值在 --all 路径里此时还可能为空，空值会让模式退化成 *" read"*，
-# 把任何恰好含 `" read` 的函数误拆。
-for _rweg_fn in read write edit grep; do
+# ⚠️ 名单里没有 read / write / edit / grep / cd：env.sh 没定义它们，
+# 这一层也不去 unset 它们 —— 那是用户自己的东西。
+for _rweg_fn in hread hwrite hedit hreplace hgrep hundo happend hprepend hundo_last_edit undo append prepend core-rweg; do
 	_rweg_body="$(declare -f "$_rweg_fn" 2>/dev/null)" || continue
-	if ! declare -F "h$_rweg_fn" >/dev/null 2>&1; then
-		_rweg_kept="$_rweg_kept $_rweg_fn"
-		continue
-	fi
 	case "$_rweg_body" in
-		*'"$_rweg_core"'*" $_rweg_fn"*) ;;
+		*'"$_rweg_core"'*) ;;
 		*) _rweg_kept="$_rweg_kept $_rweg_fn"; continue ;;
 	esac
 	unset -f "$_rweg_fn"
 	_rweg_dropped="$_rweg_dropped $_rweg_fn"
 done
 
-# --- 2. --all：env.sh 那层（h* / PATH / ns / 配置钉住）也拆 ---
+# --- 2. --all：PATH 与环境变量也还原 ---
 if [ "$_rweg_all" = 1 ]; then
-	for _rweg_fn in hread hwrite hedit hreplace hgrep hundo happend hprepend hundo_last_edit undo append prepend core-rweg; do
-		unset -f "$_rweg_fn" 2>/dev/null || true
-	done
 	if [ -n "${RWEG_BIN:-}" ]; then
 		_rweg_p="$PATH"
 		_rweg_p="${_rweg_p#"$RWEG_BIN:"}"      # 首位（env.sh 就是前置到首位）
@@ -81,9 +71,9 @@ if [ -n "$_rweg_kept" ]; then
 fi
 if [ -n "${RWEG_VERBOSE:-}" ] && [ "${RWEG_VERBOSE}" != "0" ]; then
 	if [ "$_rweg_all" = 1 ]; then
-		echo "rweg 反注册（--all）：同名命令与 h* 层都已拆，PATH / ns 恢复原状" >&2
+		echo "rweg 反注册（--all）：h* 层与 PATH / ns / 配置钉住都拆了，回到从未 source 过" >&2
 	else
-		echo "rweg 反注册：read/write/edit/grep 回到内置与 PATH（env.sh 那层保留，--all 可一并拆）" >&2
+		echo "rweg 反注册：env.sh 装的函数已拆（PATH / ns 保留，--all 可一并还原）" >&2
 	fi
 fi
 

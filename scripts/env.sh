@@ -10,9 +10,11 @@
 #   3. 记下 RWEG_HOME / RWEG_BIN / 工具路径，供函数与脚本定位
 #   4. 后台跑一次 GC —— 清理过期 namespace / 快照
 #
-# 工具是 core-rweg 的子命令（bin 里只有这一个二进制），两种名字都给：
+# 工具是 core-rweg 的子命令（bin 里只有这一个二进制），名字都给 h* 形态：
 #     hread / hwrite / hedit / hreplace / hgrep / hundo / happend / hprepend / hundo_last_edit
-#     另有同名的 read / write / edit / grep（转发判据见 1d；cd 不包）。
+#     另有与 bash 不重名的 undo / append / prepend / core-rweg。
+# 本层**不接管任何已有名字**：`read` 仍是 bash 内置、`grep` 仍是系统 grep、
+# `replace` 仍是 Windows 的 replace.exe，`cd` 不做任何包装。
 # 幂等：同一终端重复 source 不产生第二个 ns、PATH 不堆积。
 # 可在任意目录 source：配置与数据库跟随 cwd 自动切换。
 #
@@ -117,95 +119,12 @@ append()  { "$_rweg_core" append  "$@"; }
 prepend() { "$_rweg_core" prepend "$@"; }
 core-rweg() { "$_rweg_core" "$@"; }
 
-# --- 1d. 同名接管：read / write / edit / grep ---
-#
-# bash 解析之序为函数 > 内置 > PATH，故只把 $RWEG_BIN 前置到 PATH 压不过
-# 内置 read —— 这四个名字必须立函数。write / edit / grep 直接转发；
-# read 双语义：只在下列情形归 rweg —— 出现 rweg 独有 flag（-f / --file /
-# --json / --no-serve / --encoding / --quiet / -h）；零参数；或简写
-# `read FILE [RANGE ...]`（首参是**存在的文件**，且其后全是范围写法）。
-# 其余（read line、read -r line、read -p …、read -a arr）原样交还 builtin read。
-# 这套函数随 export -f 进每个子 bash，脚本里遍地都是的 `while read -r x`
-# 就靠这个判据落回 bash 语义。要 bash 原生语义写 `builtin read`；
-# 要系统 grep 走 /usr/bin/grep。
-#
-# ⚠️ replace 不在名单里：Windows 自带 %SystemRoot%\System32\replace.exe
-#（文件替换工具），抢了它会让别人的脚本与 rweg 都莫名失败；它也不是
-# bash 内置，无需接管，rweg 侧只有 hreplace。
-#
-# ⚠️ cd 也不在名单里：本层不对 cd 做任何包装，子脚本与命令替换里的 cd
-# 一律是内置 cd。
-read() {
-	# 零参数：交给 rweg。它会明确报"缺文件"，而不是像 builtin read 那样
-	# 在交互式终端上干等一行输入，把 agent 卡死。
-	if [ "$#" -eq 0 ]; then
-		"$_rweg_core" read
-		return $?
-	fi
-
-	local _a
-	for _a in "$@"; do
-		case "$_a" in
-			# rweg 自己的 flag：整体交给 rweg
-			-f | --file | --file=* | -fn | --no-anchor | --no-anchor=* | -h | --help | --json | --no-serve | --encoding | --encoding=* | --quiet)
-				"$_rweg_core" read "$@"
-				return $?
-				;;
-		esac
-	done
-
-	# 简写 read FILE [RANGE ...]：第一个参数是**存在的文件**，且后面给的全是
-	# 范围写法（1 / 2:5 / 3- / -9）。名字不带 . 或 / 一样算文件（notes、
-	# Makefile），所以 `read notes` 与 `read notes 1:5` 行为一致。
-	# `read line`、`read ans` 这类脚本写法（无同名文件）照旧走 builtin。
-	if [ -f "$1" ]; then
-		local _ranges=1 _r
-		for _r in "${@:2}"; do
-			case "$_r" in
-				[0-9]* | -[0-9]*) ;;
-				*) _ranges=0 ;;
-			esac
-		done
-		if [ "$_ranges" = 1 ]; then
-			"$_rweg_core" read "$@"
-			return $?
-		fi
-	fi
-
-	# 兜底 = bash 内置语义（read line / read -r line / read -p ... / read -a arr ...）。
-	# 无重定向时内置 read 会一直等 stdin，这里统一加有界等待：
-	#   - 重定向 / 管道里已有数据：立即返回，与原生 builtin read 同语义
-	#   - 到点仍无数据：返回 >128，并在 stderr 指出改用 read FILE
-	#   - RWEG_READ_TIMEOUT=0：恢复无限等待（慢生产者、交互式长输入）
-	# RWEG_READ_TIMEOUT 解析：off / no 与 0 同义；非法值按缺省 5 秒；08 这类按
-	# 十进制（read -t 拒绝八进制字面量）。
-	local _t="${RWEG_READ_TIMEOUT:-5}"
-	case "$_t" in
-		off | no) _t=0 ;;
-		*[!0-9]*) _t=5 ;;
-		*) _t=$((10#$_t)) ;;
-	esac
-	if [ "$_t" = 0 ]; then
-		builtin read "$@"
-		return $?
-	fi
-	builtin read -t "$_t" "$@"
-	local _rc=$?
-	if [ "$_rc" -gt 128 ]; then
-		echo "read: 等 stdin 超过 ${_t}s 未果，已放弃（RWEG_READ_TIMEOUT=0 可关掉上限）" >&2
-		echo "      读文件用 'read FILE'（存在即归 rweg）或 'read -f FILE'；脚本读变量写 builtin read" >&2
-	fi
-	return "$_rc"
-}
-write()     { "$_rweg_core" write "$@"; }
-edit()      { "$_rweg_core" edit  "$@"; }
-grep()      { "$_rweg_core" grep  "$@"; }
-
-# --- 1e. export -f ---
+# --- 1d. export -f ---
 # ⚠️ **顺序必须是先定义、再 export**：export 一个还不存在的函数是静默 no-op。
-# 名单里没有 cd：本层不包 cd，子脚本里的 cd 一律是内置 cd。
+# 名单里只有本层新建的名字：cd / read / grep 等一律不在名单内，子脚本里用到的
+# 还是系统命令与 bash 内置。
 if [ -n "${BASH_VERSION:-}" ]; then
-	export -f read write edit grep hread hwrite hedit hreplace hgrep hundo happend hprepend hundo_last_edit undo append prepend core-rweg 2>/dev/null || true
+	export -f hread hwrite hedit hreplace hgrep hundo happend hprepend hundo_last_edit undo append prepend core-rweg 2>/dev/null || true
 fi
 
 # --- 2. namespace：已存在则复用 ---
@@ -242,7 +161,7 @@ unset _rweg_src _rweg_dir _rweg_home_posix _rweg_home_native
 # 但实测这个做法**有害**：
 #
 #   bash 的子 shell（`$(...)` / `(...)` / 管道）退出时会**继承并触发** EXIT trap。
-#   也就是说 `x=$(read -f f.txt)` 跑完，RWEG_NS 就被清掉了；
+#   也就是说 `x=$(hread -f f.txt)` 跑完，RWEG_NS 就被清掉了；
 #   下一次调用只好重新派生 ns，于是撞上 strict_cwd 检查报
 #   E_NS_CWD_MISMATCH —— 一个"退出即清理"的优化，坑掉了同一终端内的正常使用。
 #
@@ -259,7 +178,8 @@ unset _rweg_src _rweg_dir _rweg_home_posix _rweg_home_native
 if [ -n "${RWEG_VERBOSE:-}" ] && [ "${RWEG_VERBOSE}" != "0" ]; then
 	{
 		echo "rweg ready (home=$RWEG_HOME, ns=${RWEG_NS:-<cwd-derived>}, walkup=${RWEG_WALKUP:-0})"
-		echo "  接管：read / write / edit / grep（同名函数），h* 别名 hread … hprepend，另有 append / prepend / undo / core-rweg"
+		echo "  h* 工具 hread / hwrite / hedit / hreplace / hgrep 就绪，另有 append / prepend / undo / core-rweg"
+		echo "  read / grep / replace / cd 都没被接管：要 rweg 语义请显式用 h* 名字"
 		echo "  诊断：core-rweg cfg | core-rweg doctor；Agent 提示词：core-rweg prompt"
 		echo "  配置钉住：${RWEG_PIN_CONFIG:-<无，按 cwd 现找>}"
 	echo "  向上找配置：RWEG_WALKUP=2 core-rweg cfg"

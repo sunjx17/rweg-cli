@@ -383,7 +383,7 @@ func runCore(args []string) error {
 		return cmdGC(args[1:])
 	case "read", "write", "edit", "replace", "grep", "undo", "append", "prepend":
 		// 工具名当子命令：装出来的 bin 里只有 core-rweg 一个二进制，
-		// env.sh 的 h* 函数与同名接管都走这条路。
+		// env.sh 的 h* 函数与不重名那几个都走这条路。
 		return runTool(Tool(args[0]), args[1:])
 	case "prompt":
 		return cmdPrompt(args[1:])

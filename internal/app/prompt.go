@@ -31,12 +31,12 @@ const agentPrompt = `# rweg 工具约定（贴进 Agent 的 system prompt）
                                                 hreplace / hgrep / hundo / happend / hprepend
                                                 （undo / append / prepend 另有不带 h 的原名；
                                                  replace 不带：系统自带 replace.exe，不抢这个名字）
-                                                另把 read / write / edit / grep 同名接管
-                                                （read 双语义：仅 rweg flag / 简写归 rweg；cd 不动）
+                                                env.sh **不接管任何已有名字**：read 仍是
+                                                bash 内置，grep 仍是系统 grep，cd 一字未动
 
-下文用短名 read / write / edit / replace / grep / undo / append / prepend；replace 只有
-h* 形态（hreplace），undo / append / prepend 两种名字都有。
-用法与系统同名命令不同。
+下文用短名 read / write / edit / replace / grep / undo / append / prepend 指这八个工具；
+shell 里真正敲的是 h* 形态（hread / hwrite / hedit / hreplace / hgrep），undo / append /
+prepend 与 core-rweg 两套名字都有，写成 core-rweg read 这种子命令形态也一样。
 以下约定优先于你惯用的 cat / sed / 整文件重写。
 
 ## 何时用哪个
@@ -163,11 +163,8 @@ edit 报错时回传的当前区间仍用「锚点│内容」形态，且这些
   选项同理：-qE / -cE / -nE 里的 E 一样吃掉（-A2E 这种带值的也拆得对）。
   -h（GNU --no-filename）翻译成 rg 的 --no-filename；-c 只数命中行，
   -A/-B/-C 的上下文不算。
-- read FILE 简写认「存在的文件」：notes、Makefile 这类无扩展名的照读；裸词
-  没有同名文件时才按 bash 内置的变量名语义处理。
-- 走 bash 内置的那些写法（read line、read -r line）最多等 stdin 5 秒
-  （RWEG_READ_TIMEOUT 可调，0 = 不限）：等不到输入即返回 >128 并提示，
-  不会挂住整条命令。要 bash 原生语义写 builtin read。
+- 裸名 read / grep 完全不经 rweg：read -f FILE 会碰内置 read 的 "-f: invalid option"，
+  grep PATTERN FILE 是系统 grep（无锚点）。要 rweg 语义就写 h*，或 core-rweg <工具>。
 - 路径两种形态都认：C:/proj/f.ts 与 /c/proj/f.ts；MSYS 的 /tmp/... 也认。
 - 配置与数据库在 source env.sh 时就**钉住**（$RWEG_PIN_CONFIG）：之后 cd 到
   哪都是同一份配置、同一个库，锚点不会因为换目录作废。想换项目就重写这个

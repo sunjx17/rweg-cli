@@ -83,9 +83,9 @@ new_sandbox() { # new_sandbox [子目录...]
 	for d in "$@"; do mkdir -p "$_sb/$d"; done
 }
 
-# 在沙箱里跑命令。source env.sh 是**真实使用路径**：
-# read / write / edit / grep 在 bash 里是内置或 PATH 命令，只有 env.sh 的同名函数压得过
-# 它们 —— 所以下文直接用短名；h* 别名对应 hread / hwrite / hedit / hgrep。
+# 在沙箱里跑命令。source env.sh 是**真实使用路径**：env.sh 不接管同名命令，
+# 所以下文一律用 h* 形态（hread / hwrite / hedit / hreplace / hgrep）与不重名的
+# undo / append / prepend / core-rweg；不经函数、直接拿子命令打的另有 raw 一节。
 #
 # 调用者 shell 里的 $RWEG_PIN_CONFIG 由 run 先 unset：它来自你自己 source 过的 env.sh，
 # 不清掉就把沙箱的 rweg.toml 整个顶掉，配置与库都落到调用者那边。
@@ -151,24 +151,24 @@ section A "read → edit → 继续 edit（锚点跟内容走）"
 new_sandbox src
 write_app_ts "$_sb" src/app.ts
 
-out="$(rsh "$_sb" read -f src/app.ts 1:6 2>/dev/null)"
+out="$(rsh "$_sb" hread -f src/app.ts 1:6 2>/dev/null)"
 check "read 头部" "# src/app.ts (6 lines, lf)" "$(printf '%s\n' "$out" | sed -n 1p)"
 check "6 行锚点序列（与参考实现一致）" "CTt,Um7,AU6,nVR,yAZ,6PY," \
 	"$(printf '%s\n' "$out" | awk -F"$SEP" 'NF>1{print $1}' | tr '\n' ',')"
 
 # 第 4 行替换成 3 行：plan §2.4 的实测值 → EPx / jDo / BlU，未动行锚点全保留。
-rc_out="$(rsh "$_sb" edit -f src/app.ts -c nVR:nVR "$(printf 'const x = 42;\nconst z = 3;\nlet w = 4;')" 2>/dev/null)"
+rc_out="$(rsh "$_sb" hedit -f src/app.ts -c nVR:nVR "$(printf 'const x = 42;\nconst z = 3;\nlet w = 4;')" 2>/dev/null)"
 check "edit 摘要（确认行 + 收尾行）" "edited ok
 src/app.ts (6 → 8 lines, +3 -1)" "$(printf '%s\n' "$rc_out" | sed -n '1p;$p')"
 check "替换后的新锚点" "EPx,jDo,BlU," \
 	"$(printf '%s\n' "$rc_out" | grep '^+' | awk -F"$SEP" '{print $1}' | sed 's/^+ //' | tr '\n' ',')"
 
-edit_after="$(rsh "$_sb" read -f src/app.ts 1:8 2>/dev/null)"
+edit_after="$(rsh "$_sb" hread -f src/app.ts 1:8 2>/dev/null)"
 check "未动的 5 行锚点全保留" "CTt,Um7,AU6,EPx,jDo,BlU,yAZ,6PY," \
 	"$(printf '%s\n' "$edit_after" | awk -F"$SEP" 'NF>1{print $1}' | tr '\n' ',')"
 
 # 继续 edit：yAZ 是"没动过的行"，它的锚点必须仍然可用。
-rsh "$_sb" edit -f src/app.ts -c yAZ:yAZ "let y = 300;" >/dev/null 2>&1
+rsh "$_sb" hedit -f src/app.ts -c yAZ:yAZ "let y = 300;" >/dev/null 2>&1
 check "位移后的旧锚点仍可 edit（rc）" "0" "$?"
 check "yAZ 那行已改" "let y = 300;" "$(sed -n 7p "$_sb/src/app.ts")"
 
@@ -177,11 +177,11 @@ section B "锚点过期 → 硬拒绝 + 回传当前锚点（reject-and-serve）
 # ─────────────────────────────────────────────────────────────
 new_sandbox src
 write_app_ts "$_sb" src/app.ts
-rsh "$_sb" read -f src/app.ts 1:6 >/dev/null 2>&1
+rsh "$_sb" hread -f src/app.ts 1:6 >/dev/null 2>&1
 # 外部工具（formatter / git checkout）改了区间内的第 2 行
 sed -i 's/console\.log("world");/console.log("world!!!");/' "$_sb/src/app.ts"
 
-out="$(rsh "$_sb" edit -f src/app.ts -c CTt:AU6 "function hi() {" 2>&1)"
+out="$(rsh "$_sb" hedit -f src/app.ts -c CTt:AU6 "function hi() {" 2>&1)"
 rcv=$?
 err="$out"
 
@@ -194,15 +194,15 @@ contains "提示可直接重试" "hint: retry with the anchors above (lines 1-3 
 check "拒绝时文件未被改动" "  console.log(\"world!!!\");" "$(sed -n 2p "$_sb/src/app.ts")"
 
 # 回显的行随即进 served → 拿回传锚点可以直接重试，不必先重新 read
-out="$(rsh "$_sb" edit -f src/app.ts -c nEt:nEt 'console.log("world??");' 2>/dev/null)"
+out="$(rsh "$_sb" hedit -f src/app.ts -c nEt:nEt 'console.log("world??");' 2>/dev/null)"
 contains "回传锚点可直接重试" "edited ok" "$(printf '%s\n' "$out" | sed -n 1p)"
 check "重试改到第 2 行" 'console.log("world??");' "$(sed -n 2p "$_sb/src/app.ts")"
 
 # 先 read 建立新基线，再用新锚点重试 → 成功
-rsh "$_sb" read -f src/app.ts 1:3 >/dev/null 2>&1
-new1="$(rsh "$_sb" read -f src/app.ts 1:3 2>/dev/null | anchor_at 1)"
-new3="$(rsh "$_sb" read -f src/app.ts 1:3 2>/dev/null | anchor_at 3)"
-rsh "$_sb" edit -f src/app.ts -c "$new1:$new3" "function hi() {" >/dev/null 2>&1
+rsh "$_sb" hread -f src/app.ts 1:3 >/dev/null 2>&1
+new1="$(rsh "$_sb" hread -f src/app.ts 1:3 2>/dev/null | anchor_at 1)"
+new3="$(rsh "$_sb" hread -f src/app.ts 1:3 2>/dev/null | anchor_at 3)"
+rsh "$_sb" hedit -f src/app.ts -c "$new1:$new3" "function hi() {" >/dev/null 2>&1
 check "read 之后重试成功（rc）" "0" "$?"
 check "第 1 行已改" "function hi() {" "$(sed -n 1p "$_sb/src/app.ts")"
 
@@ -211,8 +211,8 @@ section C "文件从未读过 → E_NEVER_READ"
 # ─────────────────────────────────────────────────────────────
 new_sandbox src
 printf 'a\nb\n' > "$_sb/src/never.ts"
-err="$(rsh "$_sb" edit -f src/never.ts -c CTt:CTt "x" 2>&1 >/dev/null)"
-rcv="$(rsh "$_sb" edit -f src/never.ts -c CTt:CTt "x" >/dev/null 2>&1; echo $?)"
+err="$(rsh "$_sb" hedit -f src/never.ts -c CTt:CTt "x" 2>&1 >/dev/null)"
+rcv="$(rsh "$_sb" hedit -f src/never.ts -c CTt:CTt "x" >/dev/null 2>&1; echo $?)"
 check "退出码" "1" "$rcv"
 contains "错误码" "E_NEVER_READ" "$err"
 contains "提示" "hint: read -f src/never.ts first" "$err"
@@ -222,15 +222,15 @@ section D "锚点不存在 / 形状非法"
 # ─────────────────────────────────────────────────────────────
 new_sandbox src
 write_app_ts "$_sb" src/app.ts
-rsh "$_sb" read -f src/app.ts 1:6 >/dev/null 2>&1
-err="$(rsh "$_sb" edit -f src/app.ts -c ZZZ:ZZZ "x" 2>&1 >/dev/null)"
+rsh "$_sb" hread -f src/app.ts 1:6 >/dev/null 2>&1
+err="$(rsh "$_sb" hedit -f src/app.ts -c ZZZ:ZZZ "x" 2>&1 >/dev/null)"
 contains "不存在的锚点" "E_UNKNOWN_ANCHOR" "$err"
-err="$(rsh "$_sb" edit -f src/app.ts -c CTt:QQQ "x" 2>&1 >/dev/null)"
+err="$(rsh "$_sb" hedit -f src/app.ts -c CTt:QQQ "x" 2>&1 >/dev/null)"
 contains "TO 侧不存在" "QQQ not in served anchors" "$err"
-rcv="$(rsh "$_sb" edit -f src/app.ts -c ZZ:ZZ "x" >/dev/null 2>&1; echo $?)"
+rcv="$(rsh "$_sb" hedit -f src/app.ts -c ZZ:ZZ "x" >/dev/null 2>&1; echo $?)"
 check "形状非法 → 用法错误(2)" "2" "$rcv"
 # 省略 `:TO` 等价于单行替换（FROM:FROM）
-rsh "$_sb" edit -f src/app.ts -c CTt "x" >/dev/null 2>&1
+rsh "$_sb" hedit -f src/app.ts -c CTt "x" >/dev/null 2>&1
 check "省略 :TO 等价于单行（rc）" "0" "$?"
 check "省略 :TO 改的是那一行" "x" "$(sed -n 1p "$_sb/src/app.ts")"
 
@@ -239,10 +239,10 @@ section E "多 -c 原子性"
 # ─────────────────────────────────────────────────────────────
 new_sandbox src
 write_app_ts "$_sb" src/app.ts
-rsh "$_sb" read -f src/app.ts 1:6 >/dev/null 2>&1
+rsh "$_sb" hread -f src/app.ts 1:6 >/dev/null 2>&1
 cp "$_sb/src/app.ts" "$_work/before.ts"
 
-rcv="$(rsh "$_sb" edit -f src/app.ts -c CTt:CTt "function hi() {" -c ZZ0:ZZ0 "boom" >/dev/null 2>&1; echo $?)"
+rcv="$(rsh "$_sb" hedit -f src/app.ts -c CTt:CTt "function hi() {" -c ZZ0:ZZ0 "boom" >/dev/null 2>&1; echo $?)"
 check "含非法 -c 时整次失败" "1" "$rcv"
 if cmp -s "$_work/before.ts" "$_sb/src/app.ts"; then
 	ok "第一个 -c 未被执行（文件字节不变）"
@@ -250,17 +250,17 @@ else
 	bad "第一个 -c 未被执行（文件字节不变）" "file changed"
 fi
 
-rsh "$_sb" edit -f src/app.ts -c CTt:CTt "function hi() {" -c yAZ:yAZ "let y = 0;" >/dev/null 2>&1
+rsh "$_sb" hedit -f src/app.ts -c CTt:CTt "function hi() {" -c yAZ:yAZ "let y = 0;" >/dev/null 2>&1
 check "两个都合法 → 一起生效（rc）" "0" "$?"
 check "第 1 行" "function hi() {" "$(sed -n 1p "$_sb/src/app.ts")"
 check "第 5 行" "let y = 0;" "$(sed -n 5p "$_sb/src/app.ts")"
 check "行数不变" "6" "$(wc -l < "$_sb/src/app.ts" | tr -d ' ')"
 
 # 删除：替换文本为 "" 表示删掉该区间
-rsh "$_sb" read -f src/app.ts 1:6 >/dev/null 2>&1
-v1="$(rsh "$_sb" read -f src/app.ts 1:2 2>/dev/null | anchor_at 1)"
-v2="$(rsh "$_sb" read -f src/app.ts 1:2 2>/dev/null | anchor_at 2)"
-rsh "$_sb" edit -f src/app.ts -c "$v1:$v2" "" >/dev/null 2>&1
+rsh "$_sb" hread -f src/app.ts 1:6 >/dev/null 2>&1
+v1="$(rsh "$_sb" hread -f src/app.ts 1:2 2>/dev/null | anchor_at 1)"
+v2="$(rsh "$_sb" hread -f src/app.ts 1:2 2>/dev/null | anchor_at 2)"
+rsh "$_sb" hedit -f src/app.ts -c "$v1:$v2" "" >/dev/null 2>&1
 check "区间删除（rc）" "0" "$?"
 check "删后行数 6 → 4" "4" "$(wc -l < "$_sb/src/app.ts" | tr -d ' ')"
 
@@ -268,35 +268,35 @@ check "删后行数 6 → 4" "4" "$(wc -l < "$_sb/src/app.ts" | tr -d ' ')"
 section F "write：创建 / 覆盖 / 自动 serve"
 # ─────────────────────────────────────────────────────────────
 new_sandbox src
-out="$(rsh "$_sb" write -f src/new.ts -c "$(printf 'export const a = 1;\nexport const b = 2;')" 2>/dev/null)"
+out="$(rsh "$_sb" hwrite -f src/new.ts -c "$(printf 'export const a = 1;\nexport const b = 2;')" 2>/dev/null)"
 check "创建摘要" "created src/new.ts (2 lines)" "$(printf '%s\n' "$out" | sed -n 1p)"
 check "创建时给的锚点" "Wb0,2Os," "$(printf '%s\n' "$out" | tail -n +2 | awk -F"$SEP" '{print $1}' | tr '\n' ',')"
 check "文件已落盘" "2" "$(wc -l < "$_sb/src/new.ts" | tr -d ' ')"
 
-rcv="$(rsh "$_sb" write -f src/nodir/x.ts -c "x" >/dev/null 2>&1; echo $?)"
-err="$(rsh "$_sb" write -f src/nodir/x.ts -c "x" 2>&1 >/dev/null)"
+rcv="$(rsh "$_sb" hwrite -f src/nodir/x.ts -c "x" >/dev/null 2>&1; echo $?)"
+err="$(rsh "$_sb" hwrite -f src/nodir/x.ts -c "x" 2>&1 >/dev/null)"
 check "目录不存在 → 1" "1" "$rcv"
 contains "E_NO_DIR" "E_NO_DIR" "$err"
 
-out="$(rsh "$_sb" write -f src/new.ts -c "export const a = 1;" 2>/dev/null)"
+out="$(rsh "$_sb" hwrite -f src/new.ts -c "export const a = 1;" 2>/dev/null)"
 check "覆盖摘要" "replaced src/new.ts (1 line)" "$(printf '%s\n' "$out" | sed -n 1p)"
 first="$(printf '%s\n' "$out" | tail -n +2 | awk -F"$SEP" '{print $1}')"
-rsh "$_sb" edit -f src/new.ts -c "$first:$first" "export const a = 42;" >/dev/null 2>&1
+rsh "$_sb" hedit -f src/new.ts -c "$first:$first" "export const a = 42;" >/dev/null 2>&1
 check "write 后无需 read 即可 edit（rc）" "0" "$?"
 check "内容已改" "export const a = 42;" "$(sed -n 1p "$_sb/src/new.ts")"
 
-rsh "$_sb" write -f src/empty.ts -c "" >/dev/null 2>&1
+rsh "$_sb" hwrite -f src/empty.ts -c "" >/dev/null 2>&1
 check "写空文件（rc）" "0" "$?"
 check "空文件大小" "0" "$(wc -c < "$_sb/src/empty.ts" | tr -d ' ')"
 
-printf 'l1\nl2\n' | ( builtin cd "$_sb" && export RWEG_NS="$NS" && unset RWEG_PIN_CONFIG && . "$_home/scripts/env.sh" >/dev/null 2>&1 && write -f src/pipe.ts ) >/dev/null 2>&1
+printf 'l1\nl2\n' | ( builtin cd "$_sb" && export RWEG_NS="$NS" && unset RWEG_PIN_CONFIG && . "$_home/scripts/env.sh" >/dev/null 2>&1 && hwrite -f src/pipe.ts ) >/dev/null 2>&1
 check "从 stdin 写（rc）" "0" "$?"
 check "stdin 内容行数" "2" "$(wc -l < "$_sb/src/pipe.ts" | tr -d ' ')"
 
-rsh "$_sb" write -f src/crlf.ts -c "a
+rsh "$_sb" hwrite -f src/crlf.ts -c "a
 b" >/dev/null 2>&1
 printf 'a\r\nb\r\n' > "$_sb/src/host.ts"
-rsh "$_sb" write -f src/host.ts -c "x
+rsh "$_sb" hwrite -f src/host.ts -c "x
 y" >/dev/null 2>&1
 check "覆盖已有 CRLF 文件仍保持 CRLF" "2" "$(grep -c $'\r$' "$_sb/src/host.ts")"
 
@@ -309,7 +309,7 @@ blk() { # blk <期望块头> <范围...>
 	local want="$1"
 	shift
 	local got
-	got="$(rsh "$_sb" read -f src/app.ts "$@" 2>/dev/null | sed -n 2p)"
+	got="$(rsh "$_sb" hread -f src/app.ts "$@" 2>/dev/null | sed -n 2p)"
 	check "read $*" "$want" "$got"
 }
 blk "4:6:" "4-"
@@ -319,22 +319,22 @@ blk "1:4:" "1:3" "2:4"
 blk "1:6:" "1:3" "4:6"
 blk "1:3:" "5:6" "1:3"
 check "不相交范围分两块" "2" \
-	"$(rsh "$_sb" read -f src/app.ts "1:3" "5:6" 2>/dev/null | grep -c '^[0-9]*:[0-9]*:$')"
+	"$(rsh "$_sb" hread -f src/app.ts "1:3" "5:6" 2>/dev/null | grep -c '^[0-9]*:[0-9]*:$')"
 
 new_sandbox src
 write_app_ts "$_sb" src/app.ts
-rsh "$_sb" read -f src/app.ts 1:3 5:6 >/dev/null 2>&1
+rsh "$_sb" hread -f src/app.ts 1:3 5:6 >/dev/null 2>&1
 # 第 4 行没被 serve → 它的锚点不能用于 edit（fail-closed）
-err="$(rsh "$_sb" edit -f src/app.ts -c nVR:nVR "const x = 9;" 2>&1 >/dev/null)"
+err="$(rsh "$_sb" hedit -f src/app.ts -c nVR:nVR "const x = 9;" 2>&1 >/dev/null)"
 contains "未 serve 的行不能编辑" "E_UNKNOWN_ANCHOR" "$err"
 # 已 serve 的两段都可以
-rsh "$_sb" edit -f src/app.ts -c yAZ:yAZ "let y = 9;" >/dev/null 2>&1
+rsh "$_sb" hedit -f src/app.ts -c yAZ:yAZ "let y = 9;" >/dev/null 2>&1
 check "已 serve 的第 5 行可以编辑（rc）" "0" "$?"
 
 # --json
 new_sandbox src
 write_app_ts "$_sb" src/app.ts
-js="$(rsh "$_sb" read -f src/app.ts 1:2 --json 2>/dev/null)"
+js="$(rsh "$_sb" hread -f src/app.ts 1:2 --json 2>/dev/null)"
 contains "json 有 blocks" '"blocks"' "$js"
 contains "json 有锚点数组" '"CTt"' "$js"
 contains "json 有 line_count" '"line_count": 6' "$js"
@@ -351,30 +351,30 @@ max_lines = 20
 ' > "$_sb/rweg.toml"
 seq 1 300 > "$_sb/long.txt"
 
-check "头部行数是真实行数" "# long.txt (300 lines, lf)" 	"$(rsh "$_sb" read -f long.txt 1:3 2>/dev/null | sed -n 1p)"
-check "上限之外的范围可读" "250:255:" 	"$(rsh "$_sb" read -f long.txt 250:255 2>/dev/null | sed -n 2p)"
-check "上限之外的行内容正确" "250" 	"$(rsh "$_sb" read -f long.txt 250:250 2>/dev/null | sed -n 3p | awk -F"$SEP" '{print $2}')"
-check "上限之外的 N- 可读" "298:300:" 	"$(rsh "$_sb" read -f long.txt 298- 2>/dev/null | sed -n 2p)"
-check "N-M 闭区间可读" "295:300:" 	"$(rsh "$_sb" read -f long.txt 295-300 2>/dev/null | sed -n 2p)"
+check "头部行数是真实行数" "# long.txt (300 lines, lf)" 	"$(rsh "$_sb" hread -f long.txt 1:3 2>/dev/null | sed -n 1p)"
+check "上限之外的范围可读" "250:255:" 	"$(rsh "$_sb" hread -f long.txt 250:255 2>/dev/null | sed -n 2p)"
+check "上限之外的行内容正确" "250" 	"$(rsh "$_sb" hread -f long.txt 250:250 2>/dev/null | sed -n 3p | awk -F"$SEP" '{print $2}')"
+check "上限之外的 N- 可读" "298:300:" 	"$(rsh "$_sb" hread -f long.txt 298- 2>/dev/null | sed -n 2p)"
+check "N-M 闭区间可读" "295:300:" 	"$(rsh "$_sb" hread -f long.txt 295-300 2>/dev/null | sed -n 2p)"
 
-err="$(rsh "$_sb" read -f long.txt 301 2>&1 >/dev/null)"
+err="$(rsh "$_sb" hread -f long.txt 301 2>&1 >/dev/null)"
 contains "E_RANGE 提示真实行数" "300 line(s)" "$err"
 
 # 整份读：头部说真实行数并标 truncated，块只到上限
-check "整份读：头部真实行数 + truncated" "# long.txt (300 lines, lf, truncated)" 	"$(rsh "$_sb" read -f long.txt 2>/dev/null | sed -n 1p)"
-check "整份读：块头截到上限" "1:20:" 	"$(rsh "$_sb" read -f long.txt 2>/dev/null | sed -n 2p)"
-check "整份读：内容 20 行" "20" 	"$(rsh "$_sb" read -fn long.txt 2>/dev/null | sed -n '3,$p' | wc -l | tr -d ' ')"
-check "多块共用一个输出额度" "1:10: 50:59: " 	"$(rsh "$_sb" read -f long.txt 1:10 50:60 2>/dev/null | grep '^[0-9]*:[0-9]*:$' | tr '
+check "整份读：头部真实行数 + truncated" "# long.txt (300 lines, lf, truncated)" 	"$(rsh "$_sb" hread -f long.txt 2>/dev/null | sed -n 1p)"
+check "整份读：块头截到上限" "1:20:" 	"$(rsh "$_sb" hread -f long.txt 2>/dev/null | sed -n 2p)"
+check "整份读：内容 20 行" "20" 	"$(rsh "$_sb" hread -fn long.txt 2>/dev/null | sed -n '3,$p' | wc -l | tr -d ' ')"
+check "多块共用一个输出额度" "1:10: 50:59: " 	"$(rsh "$_sb" hread -f long.txt 1:10 50:60 2>/dev/null | grep '^[0-9]*:[0-9]*:$' | tr '
 ' ' ')"
 
 # 有能力读第 250 行，就意味着它能被编辑；编辑不得把文件写短
-anchor250="$(rsh "$_sb" read -f long.txt 250:250 2>/dev/null | sed -n 3p | awk -F"$SEP" '{print $1}')"
-rsh "$_sb" edit -f long.txt -c "$anchor250:$anchor250" "line two five zero" >/dev/null 2>&1
+anchor250="$(rsh "$_sb" hread -f long.txt 250:250 2>/dev/null | sed -n 3p | awk -F"$SEP" '{print $1}')"
+rsh "$_sb" hedit -f long.txt -c "$anchor250:$anchor250" "line two five zero" >/dev/null 2>&1
 check "上限之外的行可编辑（rc）" "0" "$?"
 check "编辑后文件仍是 300 行" "300" "$(wc -l < "$_sb/long.txt" | tr -d ' ')"
 check "编辑后目标行已改" "line two five zero" "$(sed -n 250p "$_sb/long.txt")"
 
-rsh "$_sb" grep -n "299" long.txt >/dev/null 2>&1
+rsh "$_sb" hgrep -n "299" long.txt >/dev/null 2>&1
 check "grep 命中上限之外的行（rc）" "0" "$?"
 
 # ─────────────────────────────────────────────────────────────
@@ -384,46 +384,46 @@ new_sandbox src
 write_app_ts "$_sb" src/app.ts
 printf '// says hello\nconst z = 9;\n' > "$_sb/src/other.ts"
 
-out="$(rsh "$_sb" grep -n hello src/ 2>/dev/null)"
+out="$(rsh "$_sb" hgrep -n hello src/ 2>/dev/null)"
 contains "块头（命中数）" "# src/app.ts (2 matches)" "$out"
 contains "行号 + 锚点 + 内容" "1:CTt${SEP}function hello() {" "$out"
 contains "第二个命中" "6:6PY${SEP}export default hello;" "$out"
 
 # grep 出来的锚点可直接 edit
-rsh "$_sb" edit -f src/app.ts -c 6PY:6PY "export default hello as greet;" >/dev/null 2>&1
+rsh "$_sb" hedit -f src/app.ts -c 6PY:6PY "export default hello as greet;" >/dev/null 2>&1
 check "grep 锚点直接 edit（rc）" "0" "$?"
 check "文件已改" "export default hello as greet;" "$(sed -n 6p "$_sb/src/app.ts")"
 
 # 管道输入 → 完全透传
-out="$(cat "$_sb/src/app.ts" | (builtin cd "$_sb" && export RWEG_NS="$NS" && unset RWEG_PIN_CONFIG && . "$_home/scripts/env.sh" >/dev/null 2>&1 && grep hello ) 2>/dev/null)"
+out="$(cat "$_sb/src/app.ts" | (builtin cd "$_sb" && export RWEG_NS="$NS" && unset RWEG_PIN_CONFIG && . "$_home/scripts/env.sh" >/dev/null 2>&1 && hgrep hello ) 2>/dev/null)"
 check "管道输入透传（原始行为）" "function hello() {
 export default hello as greet;" "$out"
 
 # rg 不可用 → 回退系统 grep
-out="$(RWEG_RG_MISSING=1 rsh "$_sb" grep -n hello src/app.ts 2>/dev/null)"
+out="$(RWEG_RG_MISSING=1 rsh "$_sb" hgrep -n hello src/app.ts 2>/dev/null)"
 check "rg 缺失 → 系统 grep 输出" "1:function hello() {" "$(printf '%s\n' "$out" | sed -n 1p)"
 
 # rg 报错 → 透传（退出码一并给）
-rcv="$(rsh "$_sb" grep --bad-flag foo src/app.ts >/dev/null 2>&1; echo $?)"
+rcv="$(rsh "$_sb" hgrep --bad-flag foo src/app.ts >/dev/null 2>&1; echo $?)"
 check "rg 报错 → 退出码透传（2）" "2" "$rcv"
 
 # -c 计数
-check "-c 单文件计数" "2" "$(rsh "$_sb" grep -c hello src/app.ts 2>/dev/null)"
-check "-c 多文件计数" "src/other.ts:1" "$(rsh "$_sb" grep -c hello src/ 2>/dev/null | sed -n 1p)"
-rcv="$(rsh "$_sb" grep -n zzzznotfound src/ >/dev/null 2>&1; echo $?)"
+check "-c 单文件计数" "2" "$(rsh "$_sb" hgrep -c hello src/app.ts 2>/dev/null)"
+check "-c 多文件计数" "src/other.ts:1" "$(rsh "$_sb" hgrep -c hello src/ 2>/dev/null | sed -n 1p)"
+rcv="$(rsh "$_sb" hgrep -n zzzznotfound src/ >/dev/null 2>&1; echo $?)"
 check "无匹配 → 1" "1" "$rcv"
-check "-C1 上下文行也带上锚点" "3" "$(rsh "$_sb" grep -C1 world src/app.ts 2>/dev/null | grep -c "$SEP")"
+check "-C1 上下文行也带上锚点" "3" "$(rsh "$_sb" hgrep -C1 world src/app.ts 2>/dev/null | grep -c "$SEP")"
 # -c 的 GNU 语义：只数命中行，-A/-B/-C 的上下文不算；块头同。
-check "-C1 下 -c 只数命中行" "1" "$(rsh "$_sb" grep -c -C1 world src/app.ts 2>/dev/null)"
+check "-C1 下 -c 只数命中行" "1" "$(rsh "$_sb" hgrep -c -C1 world src/app.ts 2>/dev/null)"
 contains "命中数头只数命中行" "# src/app.ts (1 match)" \
-	"$(rsh "$_sb" grep -C1 world src/app.ts 2>/dev/null | sed -n 1p)"
+	"$(rsh "$_sb" hgrep -C1 world src/app.ts 2>/dev/null | sed -n 1p)"
 # GNU 的 -h（--no-filename）：带模式/路径时是搜索，不是帮助（rg 的 -h 才是帮助）。
 contains "grep -h pat 是搜索" "1:CTt${SEP}" \
-	"$(rsh "$_sb" grep -h hello src/app.ts 2>/dev/null)"
-out="$(RWEG_RG_MISSING=1 rsh "$_sb" grep -h hello src/app.ts 2>/dev/null)"
+	"$(rsh "$_sb" hgrep -h hello src/app.ts 2>/dev/null)"
+out="$(RWEG_RG_MISSING=1 rsh "$_sb" hgrep -h hello src/app.ts 2>/dev/null)"
 check "回退系统 grep 时 -h 不带文件名前缀" "function hello() {" "$(printf '%s\n' "$out" | sed -n 1p)"
 # --json：锚点路径也要给结构化输出（此前只有 -c 认它）
-js="$(rsh "$_sb" grep --json hello src/app.ts 2>/dev/null)"
+js="$(rsh "$_sb" hgrep --json hello src/app.ts 2>/dev/null)"
 contains "grep --json 有 path" '"path"' "$js"
 contains "grep --json 有锚点" '"hash": "CTt"' "$js"
 contains "grep --json 有命中标记" '"match": true' "$js"
@@ -435,12 +435,12 @@ new_sandbox
 
 # CRLF + UTF-8 BOM
 printf '\xef\xbb\xbfhello\r\nworld\r\n' > "$_sb/win.txt"
-out="$(rsh "$_sb" read -f win.txt 2>/dev/null)"
+out="$(rsh "$_sb" hread -f win.txt 2>/dev/null)"
 check "头部同时标出 crlf 与 bom" "# win.txt (2 lines, crlf, bom)" "$(printf '%s\n' "$out" | sed -n 1p)"
 check "BOM 不混进内容" "hello" "$(printf '%s\n' "$out" | sed -n 3p | awk -F"$SEP" '{print $2}')"
-rsh "$_sb" read -f win.txt >/dev/null 2>&1
-a="$(rsh "$_sb" read -f win.txt 2>/dev/null | anchor_at 1)"
-rsh "$_sb" edit -f win.txt -c "$a:$a" "HELLO" >/dev/null 2>&1
+rsh "$_sb" hread -f win.txt >/dev/null 2>&1
+a="$(rsh "$_sb" hread -f win.txt 2>/dev/null | anchor_at 1)"
+rsh "$_sb" hedit -f win.txt -c "$a:$a" "HELLO" >/dev/null 2>&1
 check "编辑 CRLF+BOM 文件（rc）" "0" "$?"
 if cmp -s <(printf '\xef\xbb\xbfHELLO\r\nworld\r\n') "$_sb/win.txt"; then
 	ok "写回保持 CRLF + BOM（逐字节）"
@@ -451,13 +451,13 @@ fi
 # 混合行尾：**新增行用多数派**，被保留的行逐行沿用原行尾。
 new_sandbox
 printf 'a\r\nb\nc\r\n' > "$_sb/mixed.txt"
-out="$(rsh "$_sb" read -f mixed.txt 2>/dev/null)"
+out="$(rsh "$_sb" hread -f mixed.txt 2>/dev/null)"
 check "混合行尾标记" "# mixed.txt (3 lines, crlf, mixed-eol)" "$(printf '%s\n' "$out" | sed -n 1p)"
-rsh "$_sb" read -f mixed.txt >/dev/null 2>&1
-a1="$(rsh "$_sb" read -f mixed.txt 2>/dev/null | anchor_at 1)"
+rsh "$_sb" hread -f mixed.txt >/dev/null 2>&1
+a1="$(rsh "$_sb" hread -f mixed.txt 2>/dev/null | anchor_at 1)"
 # 第 1 行（CRLF）替换成 2 行 → 新行用多数派 CRLF；
 # 第 2 行（LF）和第 3 行（CRLF）必须**各自保持原样**（这正是 P2 修掉的行尾错位 bug）。
-rsh "$_sb" edit -f mixed.txt -c "$a1:$a1" "$(printf 'a1\na2')" >/dev/null 2>&1
+rsh "$_sb" hedit -f mixed.txt -c "$a1:$a1" "$(printf 'a1\na2')" >/dev/null 2>&1
 if cmp -s <(printf 'a1\r\na2\r\nb\nc\r\n') "$_sb/mixed.txt"; then
 	ok "混合行尾：新增行用多数派、保留行不错位"
 else
@@ -466,8 +466,8 @@ fi
 
 # 二进制
 printf 'a\x00b\n' > "$_sb/bin.dat"
-err="$(rsh "$_sb" read -f bin.dat 2>&1 >/dev/null)"
-rcv="$(rsh "$_sb" read -f bin.dat >/dev/null 2>&1; echo $?)"
+err="$(rsh "$_sb" hread -f bin.dat 2>&1 >/dev/null)"
+rcv="$(rsh "$_sb" hread -f bin.dat >/dev/null 2>&1; echo $?)"
 check "二进制 → 1" "1" "$rcv"
 contains "报出 NUL 偏移" "NUL byte at offset 1" "$err"
 
@@ -477,13 +477,13 @@ contains "报出 NUL 偏移" "NUL byte at offset 1" "$err"
 # 直接塞原始 GBK 字节进去属于未定义输入。工具负责把 UTF-8 文本
 # 按原文件编码写回。
 printf '\xd6\xd0\xce\xc4\xba\xc5\xca\xa1\n' > "$_sb/gbk.txt"   # 中文号省
-out="$(rsh "$_sb" read -f gbk.txt 2>/dev/null)"
+out="$(rsh "$_sb" hread -f gbk.txt 2>/dev/null)"
 # ⚠️ 探测按"解码结果的字符分布"打分（Big5 → GBK → GB18030 特指优先）：
 # 纯 GBK 字节现在报更精确的 gbk，而不是被 GB18030 子集关系统吞。
 check "GBK 自动探测（gbk）" "# gbk.txt (1 line, lf, gbk)" "$(printf '%s\n' "$out" | sed -n 1p)"
 check "GBK 内容解码正确" "中文号省" "$(printf '%s\n' "$out" | sed -n 3p | awk -F"$SEP" '{print $2}')"
 a3="$(printf '%s\n' "$out" | anchor_at 1)"
-rsh "$_sb" edit -f gbk.txt -c "$a3:$a3" "中文号省二号" >/dev/null 2>&1
+rsh "$_sb" hedit -f gbk.txt -c "$a3:$a3" "中文号省二号" >/dev/null 2>&1
 check "编辑 GBK 文件（rc）" "0" "$?"
 # 中文号省二号 的 GBK 字节
 if cmp -s <(printf '\xd6\xd0\xce\xc4\xba\xc5\xca\xa1\xb6\xfe\xba\xc5\n') "$_sb/gbk.txt"; then
@@ -491,19 +491,19 @@ if cmp -s <(printf '\xd6\xd0\xce\xc4\xba\xc5\xca\xa1\xb6\xfe\xba\xc5\n') "$_sb/g
 else
 	bad "写回仍是 GBK 字节（未静默转成 UTF-8）" "$(od -An -tx1 "$_sb/gbk.txt")"
 fi
-check "改完还能读回来" "中文号省二号" "$(rsh "$_sb" read -f gbk.txt 2>/dev/null | sed -n 3p | awk -F"$SEP" '{print $2}')"
+check "改完还能读回来" "中文号省二号" "$(rsh "$_sb" hread -f gbk.txt 2>/dev/null | sed -n 3p | awk -F"$SEP" '{print $2}')"
 
 # 强制指定编码
-out="$(rsh "$_sb" read -f gbk.txt --encoding gb18030 2>/dev/null)"
+out="$(rsh "$_sb" hread -f gbk.txt --encoding gb18030 2>/dev/null)"
 check "强制编码" "# gbk.txt (1 line, lf, gb18030)" "$(printf '%s\n' "$out" | sed -n 1p)"
 
 # Big5：自动探测不再被 GB18030 吃掉（往返检查分不出表，按字符分布选）。
 printf '\xa4\xa4\xa4\xe5\n' > "$_sb/big5.txt"   # Big5 的「中文」
-out="$(rsh "$_sb" read -f big5.txt 2>/dev/null)"
+out="$(rsh "$_sb" hread -f big5.txt 2>/dev/null)"
 check "Big5 自动探测" "# big5.txt (1 line, lf, big5)" "$(printf '%s\n' "$out" | sed -n 1p)"
 check "Big5 内容解码正确" "中文" "$(printf '%s\n' "$out" | sed -n 3p | awk -F"$SEP" '{print $2}')"
 b5="$(printf '%s\n' "$out" | anchor_at 1)"
-rsh "$_sb" edit -f big5.txt -c "$b5:$b5" "中文繁" >/dev/null 2>&1
+rsh "$_sb" hedit -f big5.txt -c "$b5:$b5" "中文繁" >/dev/null 2>&1
 check "编辑 Big5 文件（rc）" "0" "$?"
 if cmp -s <(printf '\xa4\xa4\xa4\xe5\xc1\x63\n') "$_sb/big5.txt"; then
 	ok "Big5 写回仍是 Big5 字节"
@@ -513,10 +513,10 @@ fi
 
 # 纯 CR 行尾（经典 Mac）：识别为 cr，写回复用 CR（此前被静默重排成 LF）
 printf 'a\rb\rc\r' > "$_sb/cr.txt"
-out="$(rsh "$_sb" read -f cr.txt 2>/dev/null)"
+out="$(rsh "$_sb" hread -f cr.txt 2>/dev/null)"
 check "纯 CR 行尾标记" "# cr.txt (3 lines, cr)" "$(printf '%s\n' "$out" | sed -n 1p)"
 cra="$(printf '%s\n' "$out" | anchor_at 1)"
-rsh "$_sb" edit -f cr.txt -c "$cra:$cra" "A" >/dev/null 2>&1
+rsh "$_sb" hedit -f cr.txt -c "$cra:$cra" "A" >/dev/null 2>&1
 if cmp -s <(printf 'A\rb\rc\r') "$_sb/cr.txt"; then
 	ok "CR 文件写回仍是 CR"
 else
@@ -533,20 +533,20 @@ NS_B="wE2Ezx-00001" # 终端 B：从没读过
 NS_C="wE2Ezw-00001" # 终端 C：read 过（用来证明 B 的拒不影响别人）
 
 # 注意取 `tail -1`：read 的第一行是 `# 路径 (6 lines, lf)` 头部。
-out="$(rsh_env "$_sb" "RWEG_NS=$NS_A" read -f src/app.ts 1:1 2>/dev/null | tail -1)"
+out="$(rsh_env "$_sb" "RWEG_NS=$NS_A" hread -f src/app.ts 1:1 2>/dev/null | tail -1)"
 check "终端 A 读到锚点" "CTt${SEP}function hello() {" "$out"
-out="$(rsh_env "$_sb" "RWEG_NS=$NS_C" read -f src/app.ts 1:1 2>/dev/null | tail -1)"
+out="$(rsh_env "$_sb" "RWEG_NS=$NS_C" hread -f src/app.ts 1:1 2>/dev/null | tail -1)"
 check "终端 C 读到**相同**锚点（内容寻址）" "CTt${SEP}function hello() {" "$out"
 
 # B 从没 read 过 → 用 A 的锚点编辑被拒（ns 隔离 served，不隔离锚点本身）
-err="$(rsh_env "$_sb" "RWEG_NS=$NS_B" edit -f src/app.ts -c CTt:CTt "x" 2>&1 >/dev/null)"
-rcv="$(rsh_env "$_sb" "RWEG_NS=$NS_B" edit -f src/app.ts -c CTt:CTt "x" >/dev/null 2>&1; echo $?)"
+err="$(rsh_env "$_sb" "RWEG_NS=$NS_B" hedit -f src/app.ts -c CTt:CTt "x" 2>&1 >/dev/null)"
+rcv="$(rsh_env "$_sb" "RWEG_NS=$NS_B" hedit -f src/app.ts -c CTt:CTt "x" >/dev/null 2>&1; echo $?)"
 check "B 用 A 的锚点 → 退出码 1" "1" "$rcv"
 contains "B 用 A 的锚点 → E_NEVER_READ" "E_NEVER_READ" "$err"
 check "B 的拒绝没有动文件" "function hello() {" "$(sed -n 1p "$_sb/src/app.ts")"
 
 # A 的 served 状态没被 B 影响，锚点仍然有效
-rsh_env "$_sb" "RWEG_NS=$NS_A" edit -f src/app.ts -c CTt:CTt "function hi() {" >/dev/null 2>&1
+rsh_env "$_sb" "RWEG_NS=$NS_A" hedit -f src/app.ts -c CTt:CTt "function hi() {" >/dev/null 2>&1
 check "A 的锚点仍有效（rc）" "0" "$?"
 check "A 改成功" "function hi() {" "$(sed -n 1p "$_sb/src/app.ts")"
 
@@ -627,7 +627,7 @@ section N "TTL / GC"
 # ─────────────────────────────────────────────────────────────
 new_sandbox src
 write_app_ts "$_sb" src/app.ts
-rsh "$_sb" read -f src/app.ts 1:6 >/dev/null 2>&1
+rsh "$_sb" hread -f src/app.ts 1:6 >/dev/null 2>&1
 out="$(rsh "$_sb" core-rweg gc 2>/dev/null | sed -n 1p)"
 contains "gc 幂等提示或统计" "GC:" "$out"
 out="$(rsh "$_sb" core-rweg gc --force 2>/dev/null | sed -n 1p)"
@@ -638,29 +638,29 @@ section Z "其它契约"
 # ─────────────────────────────────────────────────────────────
 new_sandbox src
 write_app_ts "$_sb" src/app.ts
-rcv="$(rsh "$_sb" read >/dev/null 2>&1; echo $?)"
+rcv="$(rsh "$_sb" hread >/dev/null 2>&1; echo $?)"
 check "read 缺 -f → 2" "2" "$rcv"
-rcv="$(rsh "$_sb" read -f src/app.ts 999 >/dev/null 2>&1; echo $?)"
+rcv="$(rsh "$_sb" hread -f src/app.ts 999 >/dev/null 2>&1; echo $?)"
 check "read 越界 → 2" "2" "$rcv"
-rcv="$(rsh "$_sb" edit -f src/app.ts >/dev/null 2>&1; echo $?)"
+rcv="$(rsh "$_sb" hedit -f src/app.ts >/dev/null 2>&1; echo $?)"
 check "edit 缺 -c → 2" "2" "$rcv"
-rcv="$(rsh "$_sb" write >/dev/null 2>&1; echo $?)"
+rcv="$(rsh "$_sb" hwrite >/dev/null 2>&1; echo $?)"
 check "write 缺 -f → 2" "2" "$rcv"
-js="$(rsh "$_sb" write -f src/j.ts -c "a" --json 2>/dev/null)"
+js="$(rsh "$_sb" hwrite -f src/j.ts -c "a" --json 2>/dev/null)"
 contains "write --json" '"created": true' "$js"
 # -c 的内容长得像 flag 时不能被吞掉
-rsh "$_sb" write -f src/flag.ts -c "keep -v here" >/dev/null 2>&1
+rsh "$_sb" hwrite -f src/flag.ts -c "keep -v here" >/dev/null 2>&1
 check "-c 内容里的 -v 不被当 flag" "keep -v here" "$(sed -n 1p "$_sb/src/flag.ts")"
 
 # ─────────────────────────────────────────────────────────────
 section H "-h 帮助与 prompt"
 # ─────────────────────────────────────────────────────────────
 new_sandbox
-contains "write -h" "write [FILE] [CONTENT]" "$(rsh "$_sb" write -h 2>&1 | sed -n 1p)"
-contains "edit -h" "edit [FILE] FROM" "$(rsh "$_sb" edit -h 2>&1 | sed -n 1p)"
+contains "write -h" "write [FILE] [CONTENT]" "$(rsh "$_sb" hwrite -h 2>&1 | sed -n 1p)"
+contains "edit -h" "edit [FILE] FROM" "$(rsh "$_sb" hedit -h 2>&1 | sed -n 1p)"
 # grep 必须打自己的帮助：`-h` 若漏给 rg，用户看到的是 ripgrep 的手册。
-contains "grep -h 出 rweg 帮助" "grep [rg 的参数]" "$(rsh "$_sb" grep -h 2>&1 | sed -n 1p)"
-contains "grep --help 同 -h" "grep [rg 的参数]" "$(rsh "$_sb" grep --help 2>&1 | sed -n 1p)"
+contains "grep -h 出 rweg 帮助" "grep [rg 的参数]" "$(rsh "$_sb" hgrep -h 2>&1 | sed -n 1p)"
+contains "grep --help 同 -h" "grep [rg 的参数]" "$(rsh "$_sb" hgrep --help 2>&1 | sed -n 1p)"
 contains "core-rweg -h" "core-rweg —" "$(rsh "$_sb" core-rweg -h 2>&1 | sed -n 1p)"
 contains "core-rweg cfg -h" "core-rweg cfg" "$(rsh "$_sb" core-rweg cfg -h 2>&1 | sed -n 1p)"
 contains "core-rweg ns -h" "core-rweg ns" "$(rsh "$_sb" core-rweg ns -h 2>&1 | sed -n 1p)"
@@ -677,7 +677,8 @@ contains "prompt 含 undo" "undo  [FILE]" "$prompt"
 contains "prompt 含真换行要求" "真换行" "$prompt"
 contains "prompt 含 diff 形状" '"+ "' "$prompt"
 contains "prompt 含锚点失效处置" "E_STALE_RANGE" "$prompt"
-contains "prompt 含 builtin read 旁路" "builtin read" "$prompt"
+contains "prompt 说明不接管已有名字" "不接管任何已有名字" "$prompt"
+contains "prompt 指回 h* 形态" "hread / hwrite / hedit / hreplace / hgrep" "$prompt"
 contains "prompt -h 是帮助" "core-rweg prompt" "$(rsh "$_sb" core-rweg prompt -h 2>&1 | sed -n 1p)"
 
 # ─────────────────────────────────────────────────────────────
@@ -685,22 +686,22 @@ section U "undo：退回一步"
 # ─────────────────────────────────────────────────────────────
 new_sandbox
 write_app_ts "$_sb" u/app.ts
-rsh "$_sb" read -f u/app.ts 3:3 >/dev/null 2>&1
-anchor3="$(rsh "$_sb" read -f u/app.ts 3:3 2>/dev/null | tail -1 | awk -F"$SEP" '{print $1}')"
-rsh "$_sb" edit -f u/app.ts -c "$anchor3" CHANGED >/dev/null 2>&1
+rsh "$_sb" hread -f u/app.ts 3:3 >/dev/null 2>&1
+anchor3="$(rsh "$_sb" hread -f u/app.ts 3:3 2>/dev/null | tail -1 | awk -F"$SEP" '{print $1}')"
+rsh "$_sb" hedit -f u/app.ts -c "$anchor3" CHANGED >/dev/null 2>&1
 check "edit 已生效" "CHANGED" "$(sed -n 3p "$_sb/u/app.ts")"
 contains "undo 回一行结果" "undone edit" "$(rsh "$_sb" undo u/app.ts 2>/dev/null)"
 check "undo 恢复原内容" "}" "$(sed -n 3p "$_sb/u/app.ts")"
 check "undo 后旧锚点重新有效" "0" \
-    "$(rsh "$_sb" edit -f u/app.ts -c "$anchor3" AGAIN >/dev/null 2>&1; echo $?)"
+    "$(rsh "$_sb" hedit -f u/app.ts -c "$anchor3" AGAIN >/dev/null 2>&1; echo $?)"
 check "再 undo 退一层" "}" "$(rsh "$_sb" undo u/app.ts >/dev/null 2>&1; sed -n 3p "$_sb/u/app.ts")"
 # write 新建的文件：undo 就是删掉它
-rsh "$_sb" write -f u/new.ts -c temp >/dev/null 2>&1
+rsh "$_sb" hwrite -f u/new.ts -c temp >/dev/null 2>&1
 check "write 建出的文件在" "yes" "$([ -f "$_sb/u/new.ts" ] && echo yes || echo no)"
 contains "undo write 说明文件被删" "file removed" "$(rsh "$_sb" undo u/new.ts 2>/dev/null)"
 check "undo 删掉了 write 新建的文件" "no" "$([ -f "$_sb/u/new.ts" ] && echo yes || echo no)"
 # 不带路径 = 最近一次改动，不限文件
-rsh "$_sb" write -f u/latest.ts -c x >/dev/null 2>&1
+rsh "$_sb" hwrite -f u/latest.ts -c x >/dev/null 2>&1
 rsh "$_sb" undo >/dev/null 2>&1
 check "undo 不带路径回退最近一次" "no" "$([ -f "$_sb/u/latest.ts" ] && echo yes || echo no)"
 # 空栈与别名
@@ -711,7 +712,7 @@ contains "undo 不支持 --json" "not supported" "$(rsh "$_sb" undo --json 2>&1)
 # 超过 4 MiB 的前像不留副本：明确报 E_UNDO_TOO_BIG
 yes "0123456789012345678901234567890123456789" | head -c 4300000 > "$_sb/u/big.txt"
 check "覆盖 4.3 MB 已有文件" "0" \
-    "$(rsh "$_sb" write -f u/big.txt < /dev/null >/dev/null 2>&1; echo $?)"
+    "$(rsh "$_sb" hwrite -f u/big.txt < /dev/null >/dev/null 2>&1; echo $?)"
 contains "大前像报 E_UNDO_TOO_BIG" "E_UNDO_TOO_BIG" "$(rsh "$_sb" undo u/big.txt 2>&1)"
 rm -f "$_sb/u/big.txt"
 
@@ -720,15 +721,15 @@ section K "append / prepend：单锚点插行"
 # ─────────────────────────────────────────────────────────────
 new_sandbox src
 write_app_ts "$_sb" src/app.ts
-rsh "$_sb" read -f src/app.ts 1:6 >/dev/null 2>&1
-a4="$(rsh "$_sb" read -f src/app.ts 4:4 2>/dev/null | anchor_at 1)"
+rsh "$_sb" hread -f src/app.ts 1:6 >/dev/null 2>&1
+a4="$(rsh "$_sb" hread -f src/app.ts 4:4 2>/dev/null | anchor_at 1)"
 
 # 文件放在最前（可省 -f）；被锚定的那一行原样保留、锚点不变
 out="$(rsh "$_sb" append src/app.ts "$a4" "const y = 2;" 2>/dev/null)"
 check "append 摘要（确认行 + 收尾行）" "appended ok
 src/app.ts (6 → 7 lines, +1)" "$(printf '%s\n' "$out" | sed -n '1p;$p')"
 check "append 插在锚定行之后" "const y = 2;" "$(sed -n 5p "$_sb/src/app.ts")"
-check "被锚定的行锚点不变" "$a4" "$(rsh "$_sb" read -f src/app.ts 4:4 2>/dev/null | anchor_at 1)"
+check "被锚定的行锚点不变" "$a4" "$(rsh "$_sb" hread -f src/app.ts 4:4 2>/dev/null | anchor_at 1)"
 
 # prepend 插在锚定行之前；内容恰好是 rweg 认得的 flag 时用 -c 形态递进去
 out="$(rsh "$_sb" prepend src/app.ts -c "$a4" "-v" 2>/dev/null)"
@@ -738,8 +739,8 @@ check "prepend 插在锚定行之前" "-v" "$(sed -n 4p "$_sb/src/app.ts")"
 check "-c 形态保住看似 flag 的内容" "const x = 1;" "$(sed -n 5p "$_sb/src/app.ts")"
 
 # "" = 插一个空行
-rsh "$_sb" read -f src/app.ts 3:3 >/dev/null 2>&1
-a3="$(rsh "$_sb" read -f src/app.ts 3:3 2>/dev/null | anchor_at 1)"
+rsh "$_sb" hread -f src/app.ts 3:3 >/dev/null 2>&1
+a3="$(rsh "$_sb" hread -f src/app.ts 3:3 2>/dev/null | anchor_at 1)"
 rsh "$_sb" append src/app.ts "$a3" "" >/dev/null 2>&1
 check "空内容 = 插一个空行" "" "$(sed -n 4p "$_sb/src/app.ts")"
 
@@ -751,9 +752,9 @@ contains "再 undo 退 prepend" "undone prepend" "$(rsh "$_sb" undo src/app.ts 2
 new_sandbox
 printf 'a\nSHARED\n' > "$_sb/one.ts"
 printf 'b\nSHARED\n' > "$_sb/two.ts"
-rsh "$_sb" read -f one.ts >/dev/null 2>&1
-rsh "$_sb" read -f two.ts >/dev/null 2>&1
-sh="$(rsh "$_sb" read -f one.ts 2:2 2>/dev/null | anchor_at 1)"
+rsh "$_sb" hread -f one.ts >/dev/null 2>&1
+rsh "$_sb" hread -f two.ts >/dev/null 2>&1
+sh="$(rsh "$_sb" hread -f one.ts 2:2 2>/dev/null | anchor_at 1)"
 err="$(rsh "$_sb" append "$sh" NEW 2>&1 >/dev/null)"
 contains "不给文件 → 指出缺 FILE" "FILE is required" "$err"
 rcv="$(rsh "$_sb" append "$sh" NEW >/dev/null 2>&1; echo $?)"
@@ -772,26 +773,26 @@ section D "edit 的差异形态（git 风格）"
 # ─────────────────────────────────────────────────────────────
 new_sandbox
 printf 'a\nb\nc\nd\n' > "$_sb/d.txt"
-rsh "$_sb" read -f d.txt >/dev/null 2>&1
-d1="$(rsh "$_sb" read -f d.txt 2:2 2>/dev/null | tail -1 | awk -F"$SEP" '{print $1}')"
-out="$(rsh "$_sb" edit -f d.txt -c "$d1" B 2>/dev/null)"
+rsh "$_sb" hread -f d.txt >/dev/null 2>&1
+d1="$(rsh "$_sb" hread -f d.txt 2:2 2>/dev/null | tail -1 | awk -F"$SEP" '{print $1}')"
+out="$(rsh "$_sb" hedit -f d.txt -c "$d1" B 2>/dev/null)"
 contains "收尾行计数 +1 -1" "(4 → 4 lines, +1 -1)" "$(printf '%s\n' "$out" | tail -1)"
 contains "删除行带 - 前缀与旧锚点" "- ${d1}${SEP}b" "$out"
 contains "新增行带 + 前缀" "+ " "$out"
 contains "上下文行带两个空格前缀" "  " "$out"
 # 只增不减时不出现 -N
 printf 'x\ny\n' > "$_sb/ap.txt"
-rsh "$_sb" read -f ap.txt >/dev/null 2>&1
-ap1="$(rsh "$_sb" read -f ap.txt 1:1 2>/dev/null | tail -1 | awk -F"$SEP" '{print $1}')"
-out="$(rsh "$_sb" edit -f ap.txt -c "$ap1" $'x\nz' 2>/dev/null)"
+rsh "$_sb" hread -f ap.txt >/dev/null 2>&1
+ap1="$(rsh "$_sb" hread -f ap.txt 1:1 2>/dev/null | tail -1 | awk -F"$SEP" '{print $1}')"
+out="$(rsh "$_sb" hedit -f ap.txt -c "$ap1" $'x\nz' 2>/dev/null)"
 contains "只增不减时不出 -N" "(2 → 3 lines, +1)" "$(printf '%s\n' "$out" | tail -1)"
 contains "没删任何行" "+ " "$out"
 # 相距较远的块之间用 ... 省略，且只省略一次
 seq 1 20 | sed 's/^/line /' > "$_sb/far.txt"
-rsh "$_sb" read -f far.txt >/dev/null 2>&1
-f2="$(rsh "$_sb" read -f far.txt 2:2 2>/dev/null | tail -1 | awk -F"$SEP" '{print $1}')"
-f18="$(rsh "$_sb" read -f far.txt 18:18 2>/dev/null | tail -1 | awk -F"$SEP" '{print $1}')"
-out="$(rsh "$_sb" edit -f far.txt -c "$f2" L2 -c "$f18" L18 2>/dev/null)"
+rsh "$_sb" hread -f far.txt >/dev/null 2>&1
+f2="$(rsh "$_sb" hread -f far.txt 2:2 2>/dev/null | tail -1 | awk -F"$SEP" '{print $1}')"
+f18="$(rsh "$_sb" hread -f far.txt 18:18 2>/dev/null | tail -1 | awk -F"$SEP" '{print $1}')"
+out="$(rsh "$_sb" hedit -f far.txt -c "$f2" L2 -c "$f18" L18 2>/dev/null)"
 contains "远距离块收尾行计数 +2 -2" "(20 → 20 lines, +2 -2)" "$(printf '%s\n' "$out" | tail -1)"
 check "省略行只出现一次" "1" "$(printf '%s\n' "$out" | grep -c '^\.\.\.$')"
 contains "未改动的行不重复打印" "line 1" "$out"
@@ -801,39 +802,39 @@ section F "简写形态（FILE 提到最前）"
 # ─────────────────────────────────────────────────────────────
 new_sandbox
 printf 'a\nb\nc\n' > "$_sb/s.txt"
-check "read FILE 读全文" "1:3:" "$(rsh "$_sb" read s.txt 2>/dev/null | sed -n 2p)"
-contains "read FILE 带锚点" "$SEP" "$(rsh "$_sb" read s.txt 2>/dev/null | tail -1)"
-check "read FILE RANGE" "2:2:" "$(rsh "$_sb" read s.txt 2 2>/dev/null | sed -n 2p)"
-check "read FILE 多范围" "1:3:" "$(rsh "$_sb" read s.txt 1 2:3 2>/dev/null | sed -n 2p)"
-check "read -f 旧写法仍可用" "2:2:" "$(rsh "$_sb" read -f s.txt 2 2>/dev/null | sed -n 2p)"
-check "write FILE CONTENT" "created w.txt (1 line)" "$(rsh "$_sb" write w.txt hi 2>/dev/null | sed -n 1p)"
+check "read FILE 读全文" "1:3:" "$(rsh "$_sb" hread s.txt 2>/dev/null | sed -n 2p)"
+contains "read FILE 带锚点" "$SEP" "$(rsh "$_sb" hread s.txt 2>/dev/null | tail -1)"
+check "read FILE RANGE" "2:2:" "$(rsh "$_sb" hread s.txt 2 2>/dev/null | sed -n 2p)"
+check "read FILE 多范围" "1:3:" "$(rsh "$_sb" hread s.txt 1 2:3 2>/dev/null | sed -n 2p)"
+check "read -f 旧写法仍可用" "2:2:" "$(rsh "$_sb" hread -f s.txt 2 2>/dev/null | sed -n 2p)"
+check "write FILE CONTENT" "created w.txt (1 line)" "$(rsh "$_sb" hwrite w.txt hi 2>/dev/null | sed -n 1p)"
 check "write FILE 内容落盘" "hi" "$(sed -n 1p "$_sb/w.txt")"
-w1="$(rsh "$_sb" read w.txt 1:1 2>/dev/null | tail -1 | awk -F"$SEP" '{print $1}')"
-check "edit FILE FROM CONTENT" "0" "$(rsh "$_sb" edit w.txt "$w1" HI >/dev/null 2>&1; echo $?)"
+w1="$(rsh "$_sb" hread w.txt 1:1 2>/dev/null | tail -1 | awk -F"$SEP" '{print $1}')"
+check "edit FILE FROM CONTENT" "0" "$(rsh "$_sb" hedit w.txt "$w1" HI >/dev/null 2>&1; echo $?)"
 check "edit 简写改对了" "HI" "$(sed -n 1p "$_sb/w.txt")"
 # 一次多组：位置参数成对出现
 printf 'p\nq\nr\n' > "$_sb/m.txt"
-rsh "$_sb" read m.txt >/dev/null 2>&1
-m1="$(rsh "$_sb" read m.txt 1:1 2>/dev/null | tail -1 | awk -F"$SEP" '{print $1}')"
-m3="$(rsh "$_sb" read m.txt 3:3 2>/dev/null | tail -1 | awk -F"$SEP" '{print $1}')"
+rsh "$_sb" hread m.txt >/dev/null 2>&1
+m1="$(rsh "$_sb" hread m.txt 1:1 2>/dev/null | tail -1 | awk -F"$SEP" '{print $1}')"
+m3="$(rsh "$_sb" hread m.txt 3:3 2>/dev/null | tail -1 | awk -F"$SEP" '{print $1}')"
 check "edit FILE 多对（简写）" "0" \
-    "$(rsh "$_sb" edit m.txt "$m1" P "$m3" R >/dev/null 2>&1; echo $?)"
+    "$(rsh "$_sb" hedit m.txt "$m1" P "$m3" R >/dev/null 2>&1; echo $?)"
 check "多对第一处生效" "P" "$(sed -n 1p "$_sb/m.txt")"
 check "多对第二处生效" "R" "$(sed -n 3p "$_sb/m.txt")"
-check "简写缺内容 → 2" "2" "$(rsh "$_sb" edit m.txt "$m1" >/dev/null 2>&1; echo $?)"
+check "简写缺内容 → 2" "2" "$(rsh "$_sb" hedit m.txt "$m1" >/dev/null 2>&1; echo $?)"
 
 # ─────────────────────────────────────────────────────────────
 section E "grep 的 GNU 习惯兼容"
 # ─────────────────────────────────────────────────────────────
 printf 'foo\nbar\nbaz\n' > "$_sb/e.txt"
-check "grep -E 交替可用" "2" "$(rsh "$_sb" grep -c -E 'foo|bar' e.txt 2>/dev/null)"
+check "grep -E 交替可用" "2" "$(rsh "$_sb" hgrep -c -E 'foo|bar' e.txt 2>/dev/null)"
 check "grep --extended-regexp 同 -E" "2" \
-    "$(rsh "$_sb" grep -c --extended-regexp 'foo|bar' e.txt 2>/dev/null)"
-contains "grep -E 命中行带锚点" "$SEP" "$(rsh "$_sb" grep -E 'foo|bar' e.txt 2>/dev/null | tail -1)"
-check "grep -G 明确报错 → 2" "2" "$(rsh "$_sb" grep -G foo e.txt >/dev/null 2>&1; echo $?)"
-contains "grep -G 提示只有 ERE" "rg 只有 ERE" "$(rsh "$_sb" grep -G foo e.txt 2>&1)"
+    "$(rsh "$_sb" hgrep -c --extended-regexp 'foo|bar' e.txt 2>/dev/null)"
+contains "grep -E 命中行带锚点" "$SEP" "$(rsh "$_sb" hgrep -E 'foo|bar' e.txt 2>/dev/null | tail -1)"
+check "grep -G 明确报错 → 2" "2" "$(rsh "$_sb" hgrep -G foo e.txt >/dev/null 2>&1; echo $?)"
+contains "grep -G 提示只有 ERE" "rg 只有 ERE" "$(rsh "$_sb" hgrep -G foo e.txt 2>&1)"
 check "grep --encoding 仍是编码" "1" \
-    "$(rsh "$_sb" grep -c --encoding utf-8 foo e.txt 2>/dev/null)"
+    "$(rsh "$_sb" hgrep -c --encoding utf-8 foo e.txt 2>/dev/null)"
 
 # ─────────────────────────────────────────────────────────────
 section R "无锚形态 -fn"
@@ -841,7 +842,7 @@ section R "无锚形态 -fn"
 new_sandbox
 printf 'aa\nbb\ncc\n' > "$_sb/n.txt"
 
-_out="$(rsh "$_sb" read -fn n.txt)"
+_out="$(rsh "$_sb" hread -fn n.txt)"
 check "read -fn 块头仍在" "1:3:" "$(printf '%s' "$_out" | sed -n 2p)"
 check "read -fn 只给内容（无行锚）" "aa bb cc" "$(printf '%s' "$_out" | tail -n +3 | tr '\n' ' ')"
 case "$_out" in
@@ -850,14 +851,14 @@ case "$_out" in
 esac
 
 check "write -fn 只回一行确认" "created w.txt (2 lines)" \
-    "$(rsh "$_sb" write -fn w.txt -c $'x\ny')"
+    "$(rsh "$_sb" hwrite -fn w.txt -c $'x\ny')"
 check "write -fn 确实落盘" "x
 y" "$(cat "$_sb/w.txt")"
 
 check "grep -fn 只给行号与内容" "# n.txt (1 match)
-2:bb" "$(rsh "$_sb" grep -n -fn n.txt bb)"
+2:bb" "$(rsh "$_sb" hgrep -n -fn n.txt bb)"
 
-contains "read -f 仍出行锚" "$SEP" "$(rsh "$_sb" read -f n.txt 2>/dev/null | tail -1)"
+contains "read -f 仍出行锚" "$SEP" "$(rsh "$_sb" hread -f n.txt 2>/dev/null | tail -1)"
 
 section P "路径形态与读取上限"
 # ─────────────────────────────────────────────────────────────
@@ -867,37 +868,37 @@ if command -v cygpath >/dev/null 2>&1; then
         absdir="$(mktemp -d)"
         printf 'absolute hit\n' > "$absdir/abs.txt"
         contains "read 认 /tmp 形态（cygpath 兜底）" "absolute hit" \
-                "$(rsh "$_sb" read -f "$absdir/abs.txt" 2>/dev/null | tail -1)"
+                "$(rsh "$_sb" hread -f "$absdir/abs.txt" 2>/dev/null | tail -1)"
         contains "grep 认 /tmp 形态" "absolute hit" \
-                "$(rsh "$_sb" grep hit "$absdir/abs.txt" 2>/dev/null | tail -1)"
+                "$(rsh "$_sb" hgrep hit "$absdir/abs.txt" 2>/dev/null | tail -1)"
         rm -rf "$absdir"
 fi
 # 单行超过 max_line_bytes = 6000 → 锚点位置是 ~~~（不能用于 edit）
 { printf 'ok\n'; head -c 7000 /dev/zero | tr '\0' 'y'; printf '\n'; printf 'tail\n'; } > "$_sb/long.txt"
-out="$(rsh "$_sb" read -f long.txt 2>/dev/null)"
+out="$(rsh "$_sb" hread -f long.txt 2>/dev/null)"
 contains "超长行为 ~~~（不给锚点）" "~~~${SEP}yyy" "$out"
 contains "超长行的邻居照旧有锚点" "${SEP}tail" "$out"
 # 一次全读上限 max_lines = 20000：只截输出并标 truncated，头部行数仍是真实行数
 seq 1 20001 > "$_sb/many.txt"
 contains "全读上限标 truncated" "(20001 lines, lf, truncated)" \
-        "$(rsh "$_sb" read -f many.txt 2>/dev/null | sed -n 1p)"
+        "$(rsh "$_sb" hread -f many.txt 2>/dev/null | sed -n 1p)"
 check "全读上限只裁到第 20000 行" "1:20000:" \
-        "$(rsh "$_sb" read -f many.txt 2>/dev/null | sed -n 2p)"
+        "$(rsh "$_sb" hread -f many.txt 2>/dev/null | sed -n 2p)"
 check "第 20001 行仍可按范围读到" "20001:20001:" \
-        "$(rsh "$_sb" read -f many.txt 20001 2>/dev/null | sed -n 2p)"
+        "$(rsh "$_sb" hread -f many.txt 20001 2>/dev/null | sed -n 2p)"
 
 # ─────────────────────────────────────────────────────────────
 section S "replace：范围内子串 / 正则替换"
 # ─────────────────────────────────────────────────────────────
 new_sandbox src
 write_app_ts "$_sb" src/app.ts
-rsh "$_sb" read -f src/app.ts 1:6 >/dev/null 2>&1
+rsh "$_sb" hread -f src/app.ts 1:6 >/dev/null 2>&1
 
 # 取某几行的锚点（逗号分隔）——read 输出里每行的「锚点│内容」取第一段。
 anchors_at() { # anchors_at <相对路径> <范围...>
 	local f="$1"
 	shift
-	rsh "$_sb" read -f "$f" "$@" 2>/dev/null | awk -F"$SEP" 'NF>1{print $1}' | tr '\n' ','
+	rsh "$_sb" hread -f "$f" "$@" 2>/dev/null | awk -F"$SEP" 'NF>1{print $1}' | tr '\n' ','
 }
 
 # --- 精确子串：只动目标行，行数不变 ---
@@ -927,7 +928,7 @@ check "只动目标行（上一处不受影响）" "const x = 7;" "$(sed -n 4p "
 
 # --- 一行里命中几处就替换几处 ---
 printf 'aaa aaa aaa\nbbb\n' > "$_sb/multi.txt"
-rsh "$_sb" read -f multi.txt >/dev/null 2>&1
+rsh "$_sb" hread -f multi.txt >/dev/null 2>&1
 m1="$(anchors_at multi.txt 1:1)"
 rsh "$_sb" hreplace -f multi.txt -c "${m1%,}" "aaa" "z" >/dev/null 2>&1
 check "一行内多处命中全换" "z z z" "$(sed -n 1p "$_sb/multi.txt")"
@@ -935,7 +936,7 @@ check "未命中的行不动" "bbb" "$(sed -n 2p "$_sb/multi.txt")"
 
 # --- 区间：范围内全换，范围外一个不动（四行内容相同，锚点按出现次序区分） ---
 printf 'foo\nfoo\nfoo\nfoo\n' > "$_sb/range.txt"
-rsh "$_sb" read -f range.txt >/dev/null 2>&1
+rsh "$_sb" hread -f range.txt >/dev/null 2>&1
 r1="$(anchors_at range.txt 1:1)"; r2="$(anchors_at range.txt 2:2)"
 rsh "$_sb" hreplace -f range.txt -c "${r1%,}:${r2%,}" "foo" "bar" >/dev/null 2>&1
 check "区间内两行都换" "bar
@@ -946,7 +947,7 @@ check "行数不变" "4" "$(wc -l < "$_sb/range.txt" | tr -d ' ')"
 
 # --- 多组改动：-c / -cr 可重复，一次调用原子生效（与 edit 的多 -c 同规） ---
 printf 'one\ntwo\nthree\nfour\n' > "$_sb/multi2.txt"
-rsh "$_sb" read -f multi2.txt >/dev/null 2>&1
+rsh "$_sb" hread -f multi2.txt >/dev/null 2>&1
 k1="$(anchors_at multi2.txt 1:1)"; k1="${k1%,}"
 k3="$(anchors_at multi2.txt 3:3)"; k3="${k3%,}"
 k4="$(anchors_at multi2.txt 4:4)"; k4="${k4%,}"
@@ -968,7 +969,7 @@ check "重叠不写盘" "Three" "$(sed -n 3p "$_sb/multi2.txt")"
 
 # 重复 -c 曾被静默覆盖：现在两组都生效
 printf 'aaa\nbbb\n' > "$_sb/two.txt"
-rsh "$_sb" read -f two.txt >/dev/null 2>&1
+rsh "$_sb" hread -f two.txt >/dev/null 2>&1
 t1="$(anchors_at two.txt 1:1)"; t1="${t1%,}"
 t2="$(anchors_at two.txt 2:2)"; t2="${t2%,}"
 rsh "$_sb" hreplace -f two.txt -c "$t1" "aaa" "A" -c "$t2" "bbb" "B" >/dev/null 2>&1
@@ -977,7 +978,7 @@ B" "$(sed -n 1,2p "$_sb/two.txt")"
 
 # 多组中一组无命中 → E_NO_MATCH，全不写盘（原子）
 printf 'p\nq\n' > "$_sb/atom.txt"
-rsh "$_sb" read -f atom.txt >/dev/null 2>&1
+rsh "$_sb" hread -f atom.txt >/dev/null 2>&1
 a1="$(anchors_at atom.txt 1:1)"; a1="${a1%,}"
 a2="$(anchors_at atom.txt 2:2)"; a2="${a2%,}"
 err="$(rsh "$_sb" hreplace -f atom.txt -c "$a1" "p" "P" -c "$a2" "zzznope" "Q" 2>&1 >/dev/null)"
@@ -986,7 +987,7 @@ check "多组原子：无写盘" "p" "$(sed -n 1p "$_sb/atom.txt")"
 
 # 匹配空串的正则 → E_BAD_REGEX（否则替换文本插满整行）
 printf 'hello\n' > "$_sb/zerom.txt"
-rsh "$_sb" read -f zerom.txt >/dev/null 2>&1
+rsh "$_sb" hread -f zerom.txt >/dev/null 2>&1
 z1="$(anchors_at zerom.txt 1:1)"; z1="${z1%,}"
 err="$(rsh "$_sb" hreplace -f zerom.txt -cr "$z1" "x*" "Y" 2>&1 >/dev/null)"
 contains "零长匹配正则 → E_BAD_REGEX" "E_BAD_REGEX" "$err"
@@ -999,7 +1000,7 @@ check "行尾锚追加照常" "hello!" "$(sed -n 1p "$_sb/zerom.txt")"
 #
 # ⚠️ 子匹配紧随字母 / 数字 / 下划线时必须用 ${1}：`$1_` 会被 Go 读成组名 "1_"。
 printf 'v1.2.3\nv2.0.0\n' > "$_sb/sem.txt"
-rsh "$_sb" read -f sem.txt >/dev/null 2>&1
+rsh "$_sb" hread -f sem.txt >/dev/null 2>&1
 s1="$(anchors_at sem.txt 1:1)"
 rsh "$_sb" hreplace -f sem.txt -cr "${s1%,}" 'v(\d+)\.(\d+)' 'V${1}_${2}' >/dev/null 2>&1
 check "正则子匹配展开" "V1_2.3" "$(sed -n 1p "$_sb/sem.txt")"
@@ -1009,20 +1010,20 @@ rsh "$_sb" hreplace -f sem.txt -cr "${s2%,}" '[0-9]+' 'N' >/dev/null 2>&1
 check "正则字符类全换" "vN.N.N" "$(sed -n 2p "$_sb/sem.txt")"
 # 命名子匹配
 printf 'key=value\n' > "$_sb/named.txt"
-rsh "$_sb" read -f named.txt >/dev/null 2>&1
+rsh "$_sb" hread -f named.txt >/dev/null 2>&1
 n1="$(anchors_at named.txt 1:1)"
 rsh "$_sb" hreplace -f named.txt -cr "${n1%,}" '(?P<k>\w+)=(?P<v>\w+)' '${v}/${k}' >/dev/null 2>&1
 check "命名子匹配展开" "value/key" "$(sed -n 1p "$_sb/named.txt")"
 
 # --- 空替换文本 = 删掉匹配；正则命中整行则为空行（不是删行）---
 printf 'key:value\n' > "$_sb/del.txt"
-rsh "$_sb" read -f del.txt >/dev/null 2>&1
+rsh "$_sb" hread -f del.txt >/dev/null 2>&1
 d1="$(anchors_at del.txt 1:1)"
 rsh "$_sb" hreplace -f del.txt -c "${d1%,}" ":value" "" >/dev/null 2>&1
 check "空替换 = 删掉匹配" "key" "$(sed -n 1p "$_sb/del.txt")"
 
 printf 'drop\nkeep\n' > "$_sb/blank.txt"
-rsh "$_sb" read -f blank.txt >/dev/null 2>&1
+rsh "$_sb" hread -f blank.txt >/dev/null 2>&1
 b1="$(anchors_at blank.txt 1:1)"
 rsh "$_sb" hreplace -f blank.txt -cr "${b1%,}" '^\S+$' '' >/dev/null 2>&1
 check "整行命中换空 = 空行（不删行）" "2" "$(wc -l < "$_sb/blank.txt" | tr -d ' ')"
@@ -1031,19 +1032,19 @@ check "第 2 行不动" "keep" "$(sed -n 2p "$_sb/blank.txt")"
 
 # --- 替换文本 / 正则长得像 rweg 的 flag 时不能被吞掉 ---
 printf 'a-v-b\n' > "$_sb/flag.txt"
-rsh "$_sb" read -f flag.txt >/dev/null 2>&1
+rsh "$_sb" hread -f flag.txt >/dev/null 2>&1
 f1="$(anchors_at flag.txt 1:1)"
 rsh "$_sb" hreplace -f flag.txt -cr "${f1%,}" "-v" "V" >/dev/null 2>&1
 check "正则本身像 flag（-v）不被吞" "aV-b" "$(sed -n 1p "$_sb/flag.txt")"
 printf 'x\n' > "$_sb/flag2.txt"
-rsh "$_sb" read -f flag2.txt >/dev/null 2>&1
+rsh "$_sb" hread -f flag2.txt >/dev/null 2>&1
 f2="$(anchors_at flag2.txt 1:1)"
 rsh "$_sb" hreplace -f flag2.txt -c "${f2%,}" "x" "-q" >/dev/null 2>&1
 check "替换文本像 flag（-q）不被吞" "-q" "$(sed -n 1p "$_sb/flag2.txt")"
 
 # --- 编码保真：GBK 文件替换后仍是 GBK 字节 ---
 printf '\xd6\xd0\xce\xc4\xba\xc5\xca\xa1\n' > "$_sb/gbk.txt"   # 中文号省
-rsh "$_sb" read -f gbk.txt >/dev/null 2>&1
+rsh "$_sb" hread -f gbk.txt >/dev/null 2>&1
 g1="$(anchors_at gbk.txt 1:1)"
 rsh "$_sb" hreplace -f gbk.txt -c "${g1%,}" "号省" "号省二号" >/dev/null 2>&1
 if cmp -s <(printf '\xd6\xd0\xce\xc4\xba\xc5\xca\xa1\xb6\xfe\xba\xc5\n') "$_sb/gbk.txt"; then
@@ -1053,13 +1054,13 @@ else
 fi
 
 # --- undo 记的 kind 是 replace ---
-rsh "$_sb" read -f src/app.ts 4:4 >/dev/null 2>&1
+rsh "$_sb" hread -f src/app.ts 4:4 >/dev/null 2>&1
 contains "undo 记 replace" "undone replace" "$(rsh "$_sb" undo src/app.ts 2>/dev/null)"
 
 # --- 拒绝路径 ---
 new_sandbox src
 write_app_ts "$_sb" src/app.ts
-rsh "$_sb" read -f src/app.ts 1:6 >/dev/null 2>&1
+rsh "$_sb" hread -f src/app.ts 1:6 >/dev/null 2>&1
 
 # ⚠️ 与 stale-range 场景同理：出错路径的 stdout/stderr 与退出码在同一次调用里收齐，
 # 不跑第二遍 —— 就算这条错误路径本身无 serve 副作用，也统一按惯例来。
@@ -1111,7 +1112,7 @@ contains "未读过 → E_NEVER_READ" "E_NEVER_READ" "$out"
 # 不是"该失败却没失败"。
 new_sandbox src
 write_app_ts "$_sb" src/app.ts
-rsh "$_sb" read -f src/app.ts 1:6 >/dev/null 2>&1
+rsh "$_sb" hread -f src/app.ts 1:6 >/dev/null 2>&1
 sed -i 's/console\.log("world");/console.log("world!!!");/' "$_sb/src/app.ts"
 # 副本要在外部改动**之后**取：要比的是"这次 replace 有没有动文件"，
 # 不是"文件与 read 时是否一致"（sed 那一步本来就该让它不一致）。
@@ -1129,7 +1130,7 @@ fi
 # 区间跨到未 serve 的行（只读了 1:3 / 5:6）→ 拒
 new_sandbox src
 write_app_ts "$_sb" src/app.ts
-rsh "$_sb" read -f src/app.ts 1:3 5:6 >/dev/null 2>&1
+rsh "$_sb" hread -f src/app.ts 1:3 5:6 >/dev/null 2>&1
 c3="$(anchors_at src/app.ts 3:3)"; c5="$(anchors_at src/app.ts 5:5)"
 err="$(rsh "$_sb" hreplace -f src/app.ts -c "${c3%,}:${c5%,}" "let" "LET" 2>&1 >/dev/null)"
 contains "区间整体过校验链（未 serve 的行也拒）" "E_STALE_RANGE" "$err"
@@ -1137,7 +1138,7 @@ contains "区间整体过校验链（未 serve 的行也拒）" "E_STALE_RANGE" 
 # --json 可用
 new_sandbox src
 write_app_ts "$_sb" src/app.ts
-rsh "$_sb" read -f src/app.ts 1:6 >/dev/null 2>&1
+rsh "$_sb" hread -f src/app.ts 1:6 >/dev/null 2>&1
 js="$(rsh "$_sb" hreplace -f src/app.ts -c nVR "const x = 1;" "const x = 42;" --json 2>/dev/null)"
 contains "replace --json 有 path" '"path"' "$js"
 contains "replace --json 有 diff" '"diff"' "$js"
@@ -1146,7 +1147,7 @@ contains "replace --json 计数" '"added": 1' "$js"
 # -h 帮助与 core-rweg 子命令形态
 contains "replace -h 出用法" "replace -f FILE -c ANCHOR OLDSTR" \
 	"$(rsh "$_sb" hreplace -h 2>&1 | sed -n 1p)"
-rsh "$_sb" read -f src/app.ts 4:4 >/dev/null 2>&1
+rsh "$_sb" hread -f src/app.ts 4:4 >/dev/null 2>&1
 c4="$(anchors_at src/app.ts 4:4)"
 contains "core-rweg replace 子命令可用" "replaced ok" \
 	"$(rsh "$_sb" core-rweg replace -f src/app.ts -c "${c4%,}" "const x = 42;" "const x = 43;" 2>&1 | sed -n 1p)"

@@ -85,9 +85,9 @@ func parseReadArgs(args []string) (*readArgs, error) {
 	if a.file == "" {
 		hint := "read src/app.ts 1:10   （等价写法：read -f src/app.ts 1:10）"
 		if len(args) == 0 {
-			// 裸 read：env.sh 的 read 函数把它判给 rweg，免得交互式终端
-			// 上等一行输入把 agent 卡死。这里指路 bash 原生语义。
-			hint = "read -f FILE [RANGE ...]；要 bash 的读一行语义请写 builtin read"
+			// shell 里 `read` 是 bash 内置，env.sh 不接管它；这里只指路回
+			// rweg 的子命令形态（hread / core-rweg read）。
+			hint = "read -f FILE [RANGE ...]；bash 的读一行语义用内置 read"
 		}
 		return nil, UsageErr("read: FILE is required").WithHint(hint)
 	}

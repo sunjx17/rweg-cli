@@ -45,8 +45,8 @@ echo "==> RWEG_HOME = $_home"
 mkdir -p "$_home/bin" "$_home/scripts" "$_home/db"
 
 # --- bin ---
-# 只装 core-rweg 一个二进制：read / write / edit / grep / undo 是 env.sh 里的
-# bash 函数（core-rweg 的子命令），不再有 argv[0] 硬链接。
+# 只装 core-rweg 一个二进制：hread / hwrite / hedit / hgrep / hundo 这些名字是 env.sh
+# 里的 bash 函数（core-rweg 的子命令），不再有 argv[0] 硬链接。
 # 旧版本装出来的工具名文件一并清掉 —— 它们指向旧 inode，留着就是"改了代码、
 # 跑起来还是老行为"。
 for _legacy in read write edit grep undo undo_last_edit; do
@@ -68,6 +68,9 @@ cp -f "$_root/scripts/env.restore.sh" "$_home/scripts/env.restore.sh"
 cp -f "$_root/scripts/shell-test.sh" "$_home/scripts/shell-test.sh" 2>/dev/null || true
 cp -f "$_root/scripts/e2e-test.sh" "$_home/scripts/e2e-test.sh" 2>/dev/null || true
 chmod +x "$_home/scripts/env.sh" "$_home/scripts/env.restore.sh" 2>/dev/null || true
+# 旧版本装出来的侵入层不再拷装，但旧目录里可能还躺着：一并删掉，
+# 免得 source 到了旧文件、行为跟文档不一致。
+rm -f "$_home/scripts/env.aggressive.sh"
 
 # --- rweg.toml ---
 # 已存在则**不覆盖**：用户可能已经调过 dbpath 之类。
