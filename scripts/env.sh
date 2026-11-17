@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# rweg env.sh — 把 rweg 套件引入当前 shell 会话（**非侵入**入口）。
+# rweg env.sh — 把 rweg 套件引入当前 shell 会话。
 #
-# 入口有两个，任选其一：
-#     source ~/.rweg/scripts/env.sh              # 本文件：只加 h* 名字和不冲突的几种
-#     source ~/.rweg/scripts/env.aggressive.sh   # 强行接管 read/write/edit/grep
+# 用法：
+#     source ~/.rweg/scripts/env.sh              # 本文件：h* 别名 + undo / append / prepend（原名）
 #
 # 本文件做四件事：
 #   1. PATH 前置 $RWEG_HOME/bin —— 只为 `core-rweg` 能直接敲
@@ -11,11 +10,9 @@
 #   3. 记下 RWEG_HOME / RWEG_BIN / 工具路径，供函数与脚本定位
 #   4. 后台跑一次 GC —— 清理过期 namespace / 快照
 #
-# 工具是 core-rweg 的子命令（bin 里只有这一个二进制），本层给 h 前缀别名：
+# 工具是 core-rweg 的子命令（bin 里只有这一个二进制），两种名字都给：
 #     hread / hwrite / hedit / hreplace / hgrep / hundo / happend / hprepend / hundo_last_edit
-# read / write / edit / grep / undo **一个都不动**；cd 只包一层提示（见文末：
-# 不 export，行为与内置一致，env.restore.sh 认得这层并负责拆掉）。
-#
+#     另有同名的 read / write / edit / grep（转发判据见 1d；cd 不包）。
 # 幂等：同一终端重复 source 不产生第二个 ns、PATH 不堆积。
 # 可在任意目录 source：配置与数据库跟随 cwd 自动切换。
 #
@@ -95,15 +92,10 @@ case ":${PATH}:" in
 	*) export PATH="$RWEG_BIN:${PATH}" ;;
 esac
 
-# --- 1b. h* 工具函数（不覆盖任何同名命令）---
-#
-# 工具入口统一走 core-rweg 的子命令形态
-# source env.aggressive.sh（它在 env.sh 之上再加一层）。
-# append/prepend/undo bash无原生，可无侵入使用，但保风格一致还是留h*函数
+# --- 1b. h* 工具函数 ---
 #
 # **`export -f` 不能省**：不 export 的话，子进程（`bash script.sh`、
 # dsh 派生的脚本、make 里的命令行）里就没有这些函数。
-# ⚠️ **顺序必须是先定义、再 export**：export 一个还不存在的函数是静默 no-op。
 hread()  { "$_rweg_core" read  "$@"; }
 hwrite() { "$_rweg_core" write "$@"; }
 hedit()  { "$_rweg_core" edit  "$@"; }
@@ -119,16 +111,101 @@ hprepend() { "$_rweg_core" prepend "$@"; }
 # dsh-hashline-edittool 里的工具名，给个同名入口，省得两套名字来回记。
 hundo_last_edit() { "$_rweg_core" undo "$@"; }
 
-# --- 1c. 不冲突的非h*函数 ---
+# --- 1c. 不重名的非 h* 函数（bash 无原生同名者）---
 undo()  { "$_rweg_core" undo  "$@"; }
 append()  { "$_rweg_core" append  "$@"; }
 prepend() { "$_rweg_core" prepend "$@"; }
 core-rweg() { "$_rweg_core" "$@"; }
 
-# --- 1d. export -f
+# --- 1d. 同名接管：read / write / edit / grep ---
+#
+# bash 解析之序为函数 > 内置 > PATH，故只把 $RWEG_BIN 前置到 PATH 压不过
+# 内置 read —— 这四个名字必须立函数。write / edit / grep 直接转发；
+# read 双语义：只在下列情形归 rweg —— 出现 rweg 独有 flag（-f / --file /
+# --json / --no-serve / --encoding / --quiet / -h）；零参数；或简写
+# `read FILE [RANGE ...]`（首参是**存在的文件**，且其后全是范围写法）。
+# 其余（read line、read -r line、read -p …、read -a arr）原样交还 builtin read。
+# 这套函数随 export -f 进每个子 bash，脚本里遍地都是的 `while read -r x`
+# 就靠这个判据落回 bash 语义。要 bash 原生语义写 `builtin read`；
+# 要系统 grep 走 /usr/bin/grep。
+#
+# ⚠️ replace 不在名单里：Windows 自带 %SystemRoot%\System32\replace.exe
+#（文件替换工具），抢了它会让别人的脚本与 rweg 都莫名失败；它也不是
+# bash 内置，无需接管，rweg 侧只有 hreplace。
+#
+# ⚠️ cd 也不在名单里：本层不对 cd 做任何包装，子脚本与命令替换里的 cd
+# 一律是内置 cd。
+read() {
+	# 零参数：交给 rweg。它会明确报"缺文件"，而不是像 builtin read 那样
+	# 在交互式终端上干等一行输入，把 agent 卡死。
+	if [ "$#" -eq 0 ]; then
+		"$_rweg_core" read
+		return $?
+	fi
 
+	local _a
+	for _a in "$@"; do
+		case "$_a" in
+			# rweg 自己的 flag：整体交给 rweg
+			-f | --file | --file=* | -fn | --no-anchor | --no-anchor=* | -h | --help | --json | --no-serve | --encoding | --encoding=* | --quiet)
+				"$_rweg_core" read "$@"
+				return $?
+				;;
+		esac
+	done
+
+	# 简写 read FILE [RANGE ...]：第一个参数是**存在的文件**，且后面给的全是
+	# 范围写法（1 / 2:5 / 3- / -9）。名字不带 . 或 / 一样算文件（notes、
+	# Makefile），所以 `read notes` 与 `read notes 1:5` 行为一致。
+	# `read line`、`read ans` 这类脚本写法（无同名文件）照旧走 builtin。
+	if [ -f "$1" ]; then
+		local _ranges=1 _r
+		for _r in "${@:2}"; do
+			case "$_r" in
+				[0-9]* | -[0-9]*) ;;
+				*) _ranges=0 ;;
+			esac
+		done
+		if [ "$_ranges" = 1 ]; then
+			"$_rweg_core" read "$@"
+			return $?
+		fi
+	fi
+
+	# 兜底 = bash 内置语义（read line / read -r line / read -p ... / read -a arr ...）。
+	# 无重定向时内置 read 会一直等 stdin，这里统一加有界等待：
+	#   - 重定向 / 管道里已有数据：立即返回，与原生 builtin read 同语义
+	#   - 到点仍无数据：返回 >128，并在 stderr 指出改用 read FILE
+	#   - RWEG_READ_TIMEOUT=0：恢复无限等待（慢生产者、交互式长输入）
+	# RWEG_READ_TIMEOUT 解析：off / no 与 0 同义；非法值按缺省 5 秒；08 这类按
+	# 十进制（read -t 拒绝八进制字面量）。
+	local _t="${RWEG_READ_TIMEOUT:-5}"
+	case "$_t" in
+		off | no) _t=0 ;;
+		*[!0-9]*) _t=5 ;;
+		*) _t=$((10#$_t)) ;;
+	esac
+	if [ "$_t" = 0 ]; then
+		builtin read "$@"
+		return $?
+	fi
+	builtin read -t "$_t" "$@"
+	local _rc=$?
+	if [ "$_rc" -gt 128 ]; then
+		echo "read: 等 stdin 超过 ${_t}s 未果，已放弃（RWEG_READ_TIMEOUT=0 可关掉上限）" >&2
+		echo "      读文件用 'read FILE'（存在即归 rweg）或 'read -f FILE'；脚本读变量写 builtin read" >&2
+	fi
+	return "$_rc"
+}
+write()     { "$_rweg_core" write "$@"; }
+edit()      { "$_rweg_core" edit  "$@"; }
+grep()      { "$_rweg_core" grep  "$@"; }
+
+# --- 1e. export -f ---
+# ⚠️ **顺序必须是先定义、再 export**：export 一个还不存在的函数是静默 no-op。
+# 名单里没有 cd：本层不包 cd，子脚本里的 cd 一律是内置 cd。
 if [ -n "${BASH_VERSION:-}" ]; then
-	export -f hread hwrite hedit hreplace hgrep hundo happend hprepend hundo_last_edit undo append prepend core-rweg 2>/dev/null || true
+	export -f read write edit grep hread hwrite hedit hreplace hgrep hundo happend hprepend hundo_last_edit undo append prepend core-rweg 2>/dev/null || true
 fi
 
 # --- 2. namespace：已存在则复用 ---
@@ -182,40 +259,9 @@ unset _rweg_src _rweg_dir _rweg_home_posix _rweg_home_native
 if [ -n "${RWEG_VERBOSE:-}" ] && [ "${RWEG_VERBOSE}" != "0" ]; then
 	{
 		echo "rweg ready (home=$RWEG_HOME, ns=${RWEG_NS:-<cwd-derived>}, walkup=${RWEG_WALKUP:-0})"
-		echo "  h* 工具 hread / hwrite / hedit / hreplace / hgrep +  append / prepend / undo / undo_last_edit 就绪" # 后面四个就不写h*了，但也可以用
-		echo "  要同名接管（read/write/edit/grep）：source env.aggressive.sh"
+		echo "  接管：read / write / edit / grep（同名函数），h* 别名 hread … hprepend，另有 append / prepend / undo / core-rweg"
 		echo "  诊断：core-rweg cfg | core-rweg doctor；Agent 提示词：core-rweg prompt"
 		echo "  配置钉住：${RWEG_PIN_CONFIG:-<无，按 cwd 现找>}"
-echo "  向上找配置：RWEG_WALKUP=2 core-rweg cfg"
+	echo "  向上找配置：RWEG_WALKUP=2 core-rweg cfg"
 	} >&2
 fi
-# --- 额外的自定义项目:
-# --- grep，如果想临时强行接管就取消注释（供调试）
-# grep()      { "$_rweg_core" grep  "$@"; }
-# --- cd：只提示，不改行为（且不 export -f）（供调试）---
-
-# --- cd：只提示，不改行为（刻意不 export -f）---
-#
-# 给持久终端里 agent 的提示：不必每行都重复 cd 到同一目录。行为与内置 cd
-# 完全一致（退出码原样透传），提示一律走 stderr —— stdout 会被
-# $(cd ... && pwd) 这类命令替换收走，所以**不 export -f**：导出后每个子
-# 脚本都会继承它，命令替换的结果就被警告文本污染了。
-#
-# ⚠️ "WARN: do not 'cd' to same destination" 是本层的判识痕迹：
-# env.restore.sh 靠它认领这层并 unset -f cd。改文案要同步 env.restore.sh。
-# echo "WARNING:cd command is not recommended in this shell." >&2 # 给 agent 的提示，避免它在 shell 里过度 cd；默认关闭，启用可取消注释。
-cd(){
-	local last__cwd
-	last__cwd="$(pwd)"
-	if ! builtin cd "$@"; then
-		return $?
-	fi
-	if [ "$last__cwd" = "$(pwd)" ]; then
-		# 给 agent 的提示，避免它在持久 shell 里重复 cd 到同一路径（每行开头加 cd {cwd} 没有必要）。
-		# 默认开启，停用只需注释掉。
-		echo "WARN: do not 'cd' to same destination more than twice. current cwd is already '$(pwd)'" >&2
-	else
-		# 给agent的提示，同样避免它在shell里重复cd到同一路径。默认开启，停用只需注释掉。
-		echo "cd: cwd changed to '$(pwd)'" >&2
-	fi
-}

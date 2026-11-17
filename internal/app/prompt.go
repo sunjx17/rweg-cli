@@ -31,11 +31,11 @@ const agentPrompt = `# rweg 工具约定（贴进 Agent 的 system prompt）
                                                 hreplace / hgrep / hundo / happend / hprepend
                                                 （undo / append / prepend 另有不带 h 的原名；
                                                  replace 不带：系统自带 replace.exe，不抢这个名字）
-    source ~/.rweg/scripts/env.aggressive.sh  → 另把 read / write / edit / grep 强行接管
-                                                （同名覆盖；cd 另加提示）
+                                                另把 read / write / edit / grep 同名接管
+                                                （read 双语义：仅 rweg flag / 简写归 rweg；cd 不动）
 
-下文用短名 read / write / edit / replace / grep / undo / append / prepend；非侵入模式下这五个
-要加 h（hread / hwrite / hedit / hreplace / hgrep），undo / append / prepend 两种模式同名。
+下文用短名 read / write / edit / replace / grep / undo / append / prepend；replace 只有
+h* 形态（hreplace），undo / append / prepend 两种名字都有。
 用法与系统同名命令不同。
 以下约定优先于你惯用的 cat / sed / 整文件重写。
 

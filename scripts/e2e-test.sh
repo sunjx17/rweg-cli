@@ -65,7 +65,6 @@ if ! go build -trimpath -o "$(native "$_home/bin/core-rweg.exe")" ./cmd/core-rwe
 fi
 cp -f "$_root/dist-home/rweg.toml" "$_home/rweg.toml"
 cp -f "$_root/scripts/env.sh" "$_home/scripts/env.sh"
-cp -f "$_root/scripts/env.aggressive.sh" "$_home/scripts/env.aggressive.sh"
 
 echo "rweg e2e test ($_root)"
 
@@ -84,9 +83,9 @@ new_sandbox() { # new_sandbox [子目录...]
 	for d in "$@"; do mkdir -p "$_sb/$d"; done
 }
 
-# 在沙箱里跑命令。source env.aggressive.sh（它先 source env.sh）是**真实使用路径**：
-# read / write / edit / grep 在 bash 里是内置或 PATH 命令，只有接管层的同名函数压得过
-# 它们 —— 所以下文直接用短名；非侵入模式对应 hread / hwrite / hedit / hgrep。
+# 在沙箱里跑命令。source env.sh 是**真实使用路径**：
+# read / write / edit / grep 在 bash 里是内置或 PATH 命令，只有 env.sh 的同名函数压得过
+# 它们 —— 所以下文直接用短名；h* 别名对应 hread / hwrite / hedit / hgrep。
 #
 # 调用者 shell 里的 $RWEG_PIN_CONFIG 由 run 先 unset：它来自你自己 source 过的 env.sh，
 # 不清掉就把沙箱的 rweg.toml 整个顶掉，配置与库都落到调用者那边。
@@ -101,7 +100,7 @@ run() { # run <沙箱> <额外 export 串（可为空）> <命令...>
 		builtin cd "$d" || exit 1
 		if [ -n "$envs" ]; then export $envs; fi
 		unset RWEG_PIN_CONFIG
-		. "$_home/scripts/env.aggressive.sh" >/dev/null 2>&1
+		. "$_home/scripts/env.sh" >/dev/null 2>&1
 		"$@"
 	)
 }
@@ -290,7 +289,7 @@ rsh "$_sb" write -f src/empty.ts -c "" >/dev/null 2>&1
 check "写空文件（rc）" "0" "$?"
 check "空文件大小" "0" "$(wc -c < "$_sb/src/empty.ts" | tr -d ' ')"
 
-printf 'l1\nl2\n' | ( builtin cd "$_sb" && export RWEG_NS="$NS" && unset RWEG_PIN_CONFIG && . "$_home/scripts/env.aggressive.sh" >/dev/null 2>&1 && write -f src/pipe.ts ) >/dev/null 2>&1
+printf 'l1\nl2\n' | ( builtin cd "$_sb" && export RWEG_NS="$NS" && unset RWEG_PIN_CONFIG && . "$_home/scripts/env.sh" >/dev/null 2>&1 && write -f src/pipe.ts ) >/dev/null 2>&1
 check "从 stdin 写（rc）" "0" "$?"
 check "stdin 内容行数" "2" "$(wc -l < "$_sb/src/pipe.ts" | tr -d ' ')"
 
@@ -396,7 +395,7 @@ check "grep 锚点直接 edit（rc）" "0" "$?"
 check "文件已改" "export default hello as greet;" "$(sed -n 6p "$_sb/src/app.ts")"
 
 # 管道输入 → 完全透传
-out="$(cat "$_sb/src/app.ts" | (builtin cd "$_sb" && export RWEG_NS="$NS" && unset RWEG_PIN_CONFIG && . "$_home/scripts/env.aggressive.sh" >/dev/null 2>&1 && grep hello ) 2>/dev/null)"
+out="$(cat "$_sb/src/app.ts" | (builtin cd "$_sb" && export RWEG_NS="$NS" && unset RWEG_PIN_CONFIG && . "$_home/scripts/env.sh" >/dev/null 2>&1 && grep hello ) 2>/dev/null)"
 check "管道输入透传（原始行为）" "function hello() {
 export default hello as greet;" "$out"
 

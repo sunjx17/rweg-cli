@@ -29,6 +29,11 @@
 
 ### 行为
 
+- **装载层收敛为单一入口 `env.sh`**：h* 别名 / 不重名原名之外，直接把
+  `read` / `write` / `edit` / `grep` 四个同名命令也接管了（原 `env.aggressive.sh`
+  那一层并入 env.sh）；不再有 `cd` 包装函数 —— `cd` 全程是内置 cd。
+  `env.restore.sh` 随之只认这两层（同名接管 / `--all` 的 h* 与 PATH / ns）。
+
 - **`read` / `write` / `grep` 新增无锚形态 `-fn FILE`**（长写法 `--no-anchor FILE`
   / `--no-anchor=FILE`）。它与 `-f FILE` 等价，但完全不产生锚点：`read` 只回内容
   （每行没有「锚点│」前缀），`write` 成功时只回一行 created/replaced 确认、
@@ -76,13 +81,9 @@
 - `read` 接受 `N-M`（与 `N:M` 同义）：此前 `read 295-300` 报
   `E_RANGE "295-300": not a number`，`N-` 与 `-M` 都收，唯独最自然的闭区间写法被拒，
   还被误报成越界。
-- `env.restore.sh` 反注册失效（两层都拆不掉）：接管层判据改为源码形状
-  `"$_rweg_core"` + `" 工具名"`（旧判据找 `hread` 字样，aggressive 函数体里
-  根本没有）；cd 判据补上 env.sh 层的 "WARN: do not 'cd' to same destination"。
+- `env.restore.sh` 反注册失效（两层都拆不掉）：同名接管的判据改为源码形状
+  `"$_rweg_core"` + `" 工具名"`（旧判据找 `hread` 字样，转发函数体里根本没有）。
   `shell-test.sh` 新增 [9] 反注册一节（此前零覆盖，正是失效漏网的原因）。
-- `env.sh` / `env.aggressive.sh` 的 cd 提示包装：`last__cwd` 改 `local`、
-  `$(pwd)` 加引号（含空格路径不再报 too many arguments）、退出码原样透传、
-  修掉提示里未闭合的引号；退出码与内置 cd 一致。
 - `ServeLines`（read 的落库）包进 `BEGIN IMMEDIATE` 事务：多终端共享
   `RWEG_NS` 时，两个终端同时 read 同一文件会互相冲掉刚 serve 的行，
   之后 edit 莫名 `E_STALE_RANGE`。
@@ -97,7 +98,7 @@
 
 ### 文档
 
-- README：新增 `replace` 多组改动与 grep GNU 兼容一节；装载说明（cd 包装 /
+- README：新增 `replace` 多组改动与 grep GNU 兼容一节；装载说明（单入口 /
   restore 判据）对齐当前脚本；测验数字对齐当前套件。
 - `core-rweg prompt`、各工具 `-h` 同步到上述全部行为。
 

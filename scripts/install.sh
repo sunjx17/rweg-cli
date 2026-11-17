@@ -9,15 +9,13 @@
 #   $RWEG_HOME/
 #   ├── bin/         core-rweg —— 唯一二进制（工具入口是它的子命令）
 #   ├── scripts/
-#   │   ├── env.sh              非侵入入口：h* 别名 + undo / append / prepend（原名）
-#   │   ├── env.aggressive.sh   侵入入口：强行接管 read / write / edit / grep + cd 提示
+#   │   ├── env.sh              唯一入口：h* 别名 + undo / append / prepend（原名）
 #   │   └── env.restore.sh      反注册：source 它恢复内置
 #   ├── db/          安装级默认数据库目录
 #   └── rweg.toml    安装级默认配置（cwd 没有 rweg.toml 时生效）
 #
-# 不碰 /usr/bin、不覆盖全局 PATH —— 用法是 source $RWEG_HOME/scripts/env.sh
-# （或 env.aggressive.sh）。目标 bin 里旧版本留下的 read.exe / grep.exe 之类的
-# 硬链接会被清掉。
+# 不碰 /usr/bin、不覆盖全局 PATH —— 用法是 source $RWEG_HOME/scripts/env.sh。
+# 目标 bin 里旧版本留下的 read.exe / grep.exe 之类的
 #
 # 用法：
 #   ./scripts/install.sh              装到 $RWEG_HOME（默认 ~/.rweg）
@@ -66,11 +64,10 @@ fi
 # 踩过一次：export -f 的修复没生效，装出来的 env.sh 还是旧的。
 # env.sh 的真源在 scripts/，直接用。
 cp -f "$_root/scripts/env.sh" "$_home/scripts/env.sh"
-cp -f "$_root/scripts/env.aggressive.sh" "$_home/scripts/env.aggressive.sh"
 cp -f "$_root/scripts/env.restore.sh" "$_home/scripts/env.restore.sh"
 cp -f "$_root/scripts/shell-test.sh" "$_home/scripts/shell-test.sh" 2>/dev/null || true
 cp -f "$_root/scripts/e2e-test.sh" "$_home/scripts/e2e-test.sh" 2>/dev/null || true
-chmod +x "$_home/scripts/env.sh" "$_home/scripts/env.aggressive.sh" "$_home/scripts/env.restore.sh" 2>/dev/null || true
+chmod +x "$_home/scripts/env.sh" "$_home/scripts/env.restore.sh" 2>/dev/null || true
 
 # --- rweg.toml ---
 # 已存在则**不覆盖**：用户可能已经调过 dbpath 之类。
@@ -95,11 +92,10 @@ echo "==> verify"
 echo
 echo "install complete -> $_home"
 echo
-echo "用法（两种 source 方式，任选其一）："
+echo "用法："
 echo "  export RWEG_HOME=\"$_home\"          # 可选，env.sh 会自己算"
-echo "  source \"$_home/scripts/env.sh\"            # 非侵入：h* 别名 + undo / append / prepend"
-echo "  source \"$_home/scripts/env.aggressive.sh\"  # 强行接管 read / write / edit / grep（cd 另加提示）"
-echo "  source \"$_home/scripts/env.restore.sh\"     # 反注册：拆掉接管层（--all 连 env.sh 层一起拆）"
+echo "  source \"$_home/scripts/env.sh\"            # h* 别名 + undo / append / prepend（同名命令不动）"
+echo "  source \"$_home/scripts/env.restore.sh\"     # 反注册（--all 连 h* 层与 PATH / ns 一起拆）"
 echo "  core-rweg doctor"
 echo
 echo "项目级配置：在项目根放一个 rweg.toml（可只写 [db] dir），"

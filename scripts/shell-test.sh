@@ -3,8 +3,8 @@
 #
 # 覆盖那些**只有 source 过入口脚本才会暴露**的问题——
 # Go 单测覆盖不到"bash builtin 压过 PATH"这类集成层面的坑。
-# 套件主体跑在**侵入入口** env.aggressive.sh 上（read / write / edit / grep 被同名函数接管），
-# 那是下面断言所依赖的那一层；[1c] 另验非侵入入口 env.sh 不碰这四个名字。
+# 套件主体跑在入口 env.sh 上（read / write / edit / grep 被同名函数接管），
+# 那是下面断言所依赖的那一层。
 #
 # 功能语义（锚点稳定性 / 校验链 / 编码 / 原子性）在 e2e-test.sh 里。
 #
@@ -16,7 +16,7 @@
 
 set -uo pipefail
 
-# 调用者的 shell 若已经 source 过 env.sh / env.aggressive.sh，那些函数会随 export -f
+# 调用者的 shell 若已经 source 过 env.sh，那些函数会随 export -f
 # 进到本脚本里；本脚本验的是"source 之后有什么"，所以先把继承来的 rweg 函数擦干净，
 # 子进程也不再收到 BASH_FUNC_* 导出。
 for _fn in read write edit replace grep cd hread hwrite hedit hreplace hgrep hundo happend hprepend hundo_last_edit undo append prepend core-rweg; do
@@ -33,8 +33,7 @@ if [ ! -x "$_core" ]; then
 	echo "rweg not installed at $_home — run scripts/install.sh first" >&2
 	exit 1
 fi
-_env="$_home/scripts/env.aggressive.sh"  # 套件主体用的入口：先 source env.sh 再接管同名命令
-_env_plain="$_home/scripts/env.sh"       # 非侵入入口：只加 h* 与 undo / append / prepend
+_env="$_home/scripts/env.sh"            # 唯一入口：h* + undo/append/prepend + 同名接管 read/write/edit/grep
 # 工具输出与 core-rweg 报的路径是**原生**形态（C:/... 或 C:\...），$_home 与 PATH
 # 里的项却可能是 POSIX 形态（$HOME/.rweg）—— 比较前按需要过一遍 cygpath。
 nat() {
@@ -110,12 +109,11 @@ unset RWEG_PIN_CONFIG RWEG_CONFIG 2>/dev/null || true
 # 在子 shell 里 source，避免污染调用者的环境。
 # 用 bash（而非 sh）以支持函数与 builtin 语义。
 rsh()  { ( cd "$sandbox" && . "$_env"       >/dev/null 2>&1 && "$@" ) }
-rshp() { ( cd "$sandbox" && . "$_env_plain" >/dev/null 2>&1 && "$@" ) }
 
 echo "rweg shell test ($_home)"
 echo
 
-# ── 1. builtin 覆盖（env.aggressive.sh 那层：read 是 bash builtin，PATH 压不过它）──
+# ── 1. builtin 覆盖（env.sh         那层：read 是 bash builtin，PATH 压不过它）──
 echo "[1] builtin 覆盖"
 check "read 是 function（压过 builtin）" "function" "$(rsh type -t read)"
 check "grep 是 function"                  "function" "$(rsh type -t grep)"
@@ -170,38 +168,36 @@ check "RWEG_READ_TIMEOUT=0 关上限后重定向语义不变" "builtin-probe" \
 # ── 1b. source 的输出面 ──
 echo
 echo "[1b] source 的输出"
-check "env.sh 默认静默（stdout + stderr 皆空）" "" "$( ( . "$_env_plain" ) 2>&1 )"
-check "env.aggressive.sh 默认静默" "" "$( ( . "$_env" ) 2>&1 )"
+check "env.sh 默认静默（stdout + stderr 皆空）" "" "$( ( . "$_env" ) 2>&1 )"
 # 不用管道接 grep：banner 是多行，grep -q 命中首行即退出，写方吃 SIGPIPE，
 # 管道形态在负载下会偶发"没看到 banner"。先收进变量再判，顺带留证。
-_vout="$( ( export RWEG_VERBOSE=1; . "$_env_plain" ) 2>&1 >/dev/null )"
+_vout="$( ( export RWEG_VERBOSE=1; . "$_env" ) 2>&1 >/dev/null )"
 case "$_vout" in
     *rweg\ ready*) ok "RWEG_VERBOSE=1 打就绪信息" ;;
     *) bad "RWEG_VERBOSE=1 打就绪信息" "got [$_vout]" ;;
 esac
 case "$( ( export RWEG_VERBOSE=1; . "$_env" ) 2>&1 >/dev/null )" in
-    *接管*) ok "aggressive 就绪信息里点出接管了哪四个名字" ;;
-    *) bad "aggressive 就绪信息里点出接管了哪四个名字" "got [$( ( export RWEG_VERBOSE=1; . "$_env" ) 2>&1 >/dev/null )]" ;;
+    *接管*) ok "就绪信息里点出接管了哪四个名字" ;;
+    *) bad "就绪信息里点出接管了哪四个名字" "got [$_vout]" ;;
 esac
 check "就绪信息走 stderr，不脏 stdout" "" \
     "$( ( export RWEG_VERBOSE=1; . "$_env" ) 2>/dev/null )"
 check "RWEG_VERBOSE=0 仍静默" "" "$( ( export RWEG_VERBOSE=0; . "$_env" ) 2>&1 )"
 
-# ── 1c. 非侵入入口 env.sh：同名命令一个都不碰 ──
+# ── 1c. h* 别名与不重名入口；replace / cd 不占用 ──
 echo
-echo "[1c] 非侵入入口 env.sh"
-check "read 仍是 builtin（未被接管）" "builtin" "$(rshp type -t read)"
-check "grep 未被接管（仍是 PATH 上的命令）" "file" "$(rshp type -t grep)"
-check "hread 就绪" "function" "$(rshp type -t hread)"
+echo "[1c] h* 别名与不重名入口"
+check "hread 就绪" "function" "$(rsh type -t hread)"
 check "hwrite / hedit / hgrep 就绪" "function/function/function" \
-    "$(rshp bash -c 'printf "%s/%s/%s" "$(type -t hwrite)" "$(type -t hedit)" "$(type -t hgrep)"')"
-check "hreplace 就绪" "function" "$(rshp type -t hreplace)"
+    "$(rsh bash -c 'printf "%s/%s/%s" "$(type -t hwrite)" "$(type -t hedit)" "$(type -t hgrep)"')"
+check "hreplace 就绪" "function" "$(rsh type -t hreplace)"
 # replace 这个名字留给系统（Windows 自带 System32\replace.exe），rweg 只用 hreplace
 check "replace 这个名字没被 rweg 占用" "notfn" \
-    "$(rshp bash -c 'declare -F replace >/dev/null 2>&1 && echo fn || echo notfn')"
+    "$(rsh bash -c 'declare -F replace >/dev/null 2>&1 && echo fn || echo notfn')"
 check "undo / append / prepend（与 bash 不重名）就绪" "function/function/function" \
-    "$(rshp bash -c 'printf "%s/%s/%s" "$(type -t undo)" "$(type -t append)" "$(type -t prepend)"')"
-check "子进程也拿到 h*（export -f）" "function" "$(rshp bash -c 'type -t hread')"
+    "$(rsh bash -c 'printf "%s/%s/%s" "$(type -t undo)" "$(type -t append)" "$(type -t prepend)"')"
+check "子进程也拿到 h*（export -f）" "function" "$(rsh bash -c 'type -t hread')"
+check "cd 没被包装（仍是 builtin）" "builtin" "$(rsh type -t cd)"
 # ── 2. 命令可用性 ──
 echo
 echo "[2] 命令可用性"
@@ -415,13 +411,10 @@ check "grep 有匹配 → 0（退出码透传）" "0" "$?"
 # ── 9. env.restore.sh：反注册 ──
 echo
 echo "[9] env.restore.sh 反注册"
-# restore 必须能拆掉它自己装的每一层：接管层的 read / grep / cd、env.sh 那层的
-# cd 提示包装、--all 的 h* / PATH / ns。
-# ⚠️ cd **刻意不 export**（见 env.sh / env.aggressive.sh 的注释），所以在
-# `bash -c` 子进程里它本来就是 builtin —— 断言必须在 source 的**同一个** shell
-# 里做，用 rsh / rshp 直接跑（它们就是那个 shell），或手动展开同一形态。
+# restore 必须能拆掉它自己装的每一层：同名接管的 read / write / edit / grep、
+# --all 的 h* / PATH / ns。
 _restore="$_home/scripts/env.restore.sh"
-rsx() { # rsx <restore 参数串（"" = 无）> <命令...> —— source 接管层 + restore 后跑命令
+rsx() { # rsx <restore 参数串（"" = 无）> <命令...> —— source env.sh + restore 后跑命令
 	local ra="${1:-}"
 	shift
 	(
@@ -436,8 +429,8 @@ rsx() { # rsx <restore 参数串（"" = 无）> <命令...> —— source 接管
 # 探针必须是**函数**：写成 `rsx "" printf ... "$(type -t read)"` 的话，
 # 命令替换在外层（没 source 过的）shell 里就展开了，量到的是外层状态。
 probe_rw() {
-	printf '%s/%s/%s/%s' "$(type -t read 2>/dev/null)" "$(type -t grep 2>/dev/null)" \
-		"$(type -t cd 2>/dev/null)" "$(type -t hread 2>/dev/null)"
+	printf '%s/%s/%s' "$(type -t read 2>/dev/null)" "$(type -t grep 2>/dev/null)" \
+		"$(type -t hread 2>/dev/null)"
 }
 probe_all() {
 	printf '%s/%s/%s/%s' "$(type -t hread 2>/dev/null || echo none)" \
@@ -449,17 +442,11 @@ out="$(rsh bash -c 'type -t read; type -t grep')"
 check "restore 前 read/grep 是函数（export 到子进程）" "function
 function" "$out"
 out="$(rsh type -t cd)"
-check "restore 前 cd 是函数（仅本 shell）" "function" "$out"
+check "cd 全程是 builtin（env.sh 不包 cd）" "builtin" "$out"
 
-# 接管层拆掉：read 回 builtin、grep 回 PATH、cd 回 builtin；h* 那层（非 --all）保留
+# 同名接管拆掉：read 回 builtin、grep 回 PATH；h* 那层（非 --all）保留
 out="$(rsx "" probe_rw)"
-check "restore 后 read/grep/cd 归位、hread 保留" "builtin/file/builtin/function" "$out"
-
-# env.sh 那层的 cd 提示包装（"WARN: do not 'cd' to same destination"）也要认得
-out="$(rshp type -t cd)"
-check "env.sh 装了 cd 提示包装" "function" "$out"
-out="$( ( cd "$sandbox" && . "$_env_plain" >/dev/null 2>&1 && . "$_restore" >/dev/null 2>&1 && type -t cd 2>/dev/null ) )"
-check "restore 拆掉 env.sh 的 cd 包装" "builtin" "$out"
+check "restore 后 read/grep 归位、hread 保留" "builtin/file/function" "$out"
 
 # 别人装的同名函数不许动：改写 read 为自己的转发，restore 应保留并说一声
 err="$( ( cd "$sandbox" && . "$_env" >/dev/null 2>&1 && read() { builtin echo fake; } && . "$_restore" 2>&1 >/dev/null ) )"

@@ -36,34 +36,32 @@ RWEG_HOME=/d/tools/rweg ./scripts/install.sh
 $RWEG_HOME/                缺省 ~/.rweg
 ├── bin/                   core-rweg.exe —— 唯一二进制（工具入口是它的子命令）
 ├── scripts/
-│   ├── env.sh             非侵入入口：h* 别名（hread…hreplace…）+ undo / append / prepend（原名）
-│   ├── env.aggressive.sh  侵入入口：另把 read/write/edit/grep 与 cd 提示接管
-│   └── env.restore.sh     反注册入口：拆掉接管层，恢复内置
+│   ├── env.sh             唯一入口：h* 别名（hread…hreplace…）+ undo / append / prepend（原名）
+│   └── env.restore.sh     反注册入口：拆掉同名接管与 h* 层，恢复内置
 ├── db/                    安装级默认库目录
 └── rweg.toml              安装级默认配置
 ```
 
 ### source env.sh
 
-两个入口，任选其一：
+source ~/.rweg/scripts/env.sh 把整套东西装进当前 shell：
 
 | 入口 | 给什么 | 动什么 |
 |---|---|---|
-| `source ~/.rweg/scripts/env.sh` | 路径 / ns / 配置钉住 + 八个工具的 `h*` 别名（`hread` `hwrite` `hedit` `hreplace` `hgrep` `hundo` `happend` `hprepend`）+ 与 bash 不重名的原名 `undo` `append` `prepend` | 不碰 `read` / `write` / `edit` / `grep` 这四个同名命令，也不碰系统的 `replace`；`cd` 只加一行提示（不 export，子脚本里仍是内置 `cd`） |
-| `source ~/.rweg/scripts/env.aggressive.sh` | 上面全部，另加 `read` `write` `edit` `grep` 强行接管 | 覆盖 bash 内置 `read` 与系统 `grep`；`cd` 的警告提示打开（仍不 export，子脚本里是内置 `cd`） |
-| `source ~/.rweg/scripts/env.restore.sh` | 反注册：拆掉接管层，`read`/`write`/`edit`/`grep`/`cd` 回到 bash 内置与 PATH | 加 `--all` 连 `env.sh` 那层一起拆（`h*` / 原名 `undo` `append` `prepend` / PATH / `RWEG_NS` / 配置钉住） |
+| `source ~/.rweg/scripts/env.sh` | 路径 / ns / 配置钉住 + 八个工具的 `h*` 别名（`hread` `hwrite` `hedit` `hreplace` `hgrep` `hundo` `happend` `hprepend`）+ 与 bash 不重名的原名 `undo` `append` `prepend` + `read` `write` `edit` `grep` 同名接管 | 覆盖 bash 内置 `read` 与系统 `grep`；不碰系统的 `replace`；`cd` 完全不包 |
+| `source ~/.rweg/scripts/env.restore.sh` | 反注册：`read`/`write`/`edit`/`grep` 回到 bash 内置与 PATH | 加 `--all` 连 `h*` / 原名 `undo` `append` `prepend` / PATH / `RWEG_NS` / 配置钉住一起拆 |
 
-`env.aggressive.sh` 先 source `env.sh` 再叠一层。两份名字只有五个命令需要区分：`read` / `write` / `edit` / `replace` / `grep` 在非侵入模式下写作 `hread` / `hwrite` / `hedit` / `hreplace` / `hgrep`（`replace` 只此一名 —— Windows 自带 `System32\replace.exe`，不抢它）；`undo` / `append` / `prepend` 与 bash 不重名，两种模式都用原名（同时也都有 `h*` 别名：`hundo` / `happend` / `hprepend`）。工具入口都是 `core-rweg` 的子命令（`core-rweg read ...`），`bin/` 里只有 `core-rweg` 一个二进制。
+五个命令需要区分两套名字：`read` / `write` / `edit` / `replace` / `grep` 的 `h*` 形态是 `hread` / `hwrite` / `hedit` / `hreplace` / `hgrep`（`replace` 只此一名 —— Windows 自带 `System32\replace.exe`，不抢它）；`undo` / `append` / `prepend` 与 bash 不重名，两套名字同义（`hundo` / `happend` / `hprepend`）。工具入口都是 `core-rweg` 的子命令（`core-rweg read ...`），`bin/` 里只有 `core-rweg` 一个二进制。
 
 成功时**一声不吭**：stdout 与 stderr 皆空，source 的输出可安全被管道 / 命令替换捕获。欲见就绪信息，`RWEG_VERBOSE=1 source ~/.rweg/scripts/env.sh`（走 stderr）。装好与否的权威判据是 `core-rweg doctor`。
 
-接管层（`env.aggressive.sh`）为什么要立函数：`read` / `write` / `edit` 在 Git Bash 中为 bash 内置，而 bash 解析之序为函数 > 内置 > PATH。故只把 `$RWEG_HOME/bin` 前置到 PATH 无效（何况 `bin/` 里现在只有 `core-rweg`，没有 `read` / `grep` 可抢）；不改的话 `read -f app.ts 1:3` 会为内置 `read` 所吞，报 `read: -f: invalid option`。
+`env.sh` 为什么要为这四个同名命令立函数：`read` / `write` / `edit` 在 Git Bash 中为 bash 内置，而 bash 解析之序为函数 > 内置 > PATH。故只把 `$RWEG_HOME/bin` 前置到 PATH 无效（何况 `bin/` 里现在只有 `core-rweg`，没有 `read` / `grep` 可抢）；不改的话 `read -f app.ts 1:3` 会为内置 `read` 所吞，报 `read: -f: invalid option`。
 
-`env.aggressive.sh` 为 `read` / `write` / `edit` / `grep` 这四个同名命令各立转发函数（直接调 `core-rweg` 子命令），并 `export -f`；否则 `bash script.sh` 子进程中复为内置。`cd` 包装函数是**例外，不 export**：它只在本 shell 做交互提示，导出后每个子脚本都会继承它，`root="$(cd … && pwd)"` 这类命令替换会把警告文本一起收进变量；提示本身也走 stderr，不脏 stdout。
+`env.sh` 为 `read` / `write` / `edit` / `grep` 这四个同名命令各立转发函数（直接调 `core-rweg` 子命令），并 `export -f`；否则 `bash script.sh` 子进程中复为内置。`cd` **不在名单里**：本层不对 cd 做任何包装，子脚本与命令替换里的 cd 一律是内置 cd。
 
-接管层的 `read` 转发判据 —— **只在下列情形归 rweg**：出现 `-f` / `--file` / `--json` / `--no-serve` / `--encoding` / `--quiet` / `-h`；零参数；或简写 `read FILE [RANGE ...]`（首个参数是**存在的文件**，且其后全是范围写法；名字带不带 `.` 或 `/` 都认，`notes`、`Makefile` 这类无扩展名文件同样是文件）。其余（`read line`、`read -r line`、`read -p …`、`read -a arr`）原样交还 `builtin read` —— 函数随 `export -f` 进入每个子 bash，若一律转发，脚本里遍地都是的 `while read -r x` 会撞 `unknown flag "-r" for read`。零参数归 rweg（报缺 `-f`，退出码 2）：交给内置会在交互式终端上一直等一行输入，agent 一敲即卡。要 bash 原生语义写 `builtin read`；`grep` 本非内置，要系统 grep 走 `/usr/bin/grep`。非侵入模式下不存在这个问题：`read` / `grep` 根本没被碰。
+`read` 的转发判据 —— **只在下列情形归 rweg**：出现 `-f` / `--file` / `--json` / `--no-serve` / `--encoding` / `--quiet` / `-h`；零参数；或简写 `read FILE [RANGE ...]`（首个参数是**存在的文件**，且其后全是范围写法；名字带不带 `.` 或 `/` 都认，`notes`、`Makefile` 这类无扩展名文件同样是文件）。其余（`read line`、`read -r line`、`read -p …`、`read -a arr`）原样交还 `builtin read` —— 函数随 `export -f` 进入每个子 bash，若一律转发，脚本里遍地都是的 `while read -r x` 会撞 `unknown flag "-r" for read`。零参数归 rweg（报缺 `-f`，退出码 2）：交给内置会在交互式终端上一直等一行输入，agent 一敲即卡。要 bash 原生语义写 `builtin read`；`grep` 本非内置，要系统 grep 走 `/usr/bin/grep`。
 
-同上，接管层交还 builtin 的那一侧带**有界等待**（`RWEG_READ_TIMEOUT`，缺省 5 秒，`0` / `off` / `no` 关闭）：agent 的 stdin 是挂在控制台上的字符设备，`[ -t 0 ]` 为真却无人输入，无重定向的 `builtin read` 会一直等一行永不来临的输入直到外层命令超时（shell 被重置，`RWEG_NS` 一并丢）。超时返回码 >128，stderr 提示改用 `read FILE`。代价是空闲超过该值的管道（如 `tail -f log | while read -r l`）会提前结束：这类写法用 `builtin read`（不经本函数）或把上限置 0。
+同上，交还 builtin 的那一侧带**有界等待**（`RWEG_READ_TIMEOUT`，缺省 5 秒，`0` / `off` / `no` 关闭）：agent 的 stdin 是挂在控制台上的字符设备，`[ -t 0 ]` 为真却无人输入，无重定向的 `builtin read` 会一直等一行永不来临的输入直到外层命令超时（shell 被重置，`RWEG_NS` 一并丢）。超时返回码 >128，stderr 提示改用 `read FILE`。代价是空闲超过该值的管道（如 `tail -f log | while read -r l`）会提前结束：这类写法用 `builtin read`（不经本函数）或把上限置 0。
 
 `env.sh` 导出的两种路径形态各归其位：`RWEG_HOME` 为原生形态（`C:/Users/me/.rweg`），供 core-rweg 等原生程序使用 —— MSYS 不替其它环境变量做转换，若给 `/c/...`，`filepath.Join` 会拼出 `C:\c\...`（当前盘根），安装级 `rweg.toml` 找不到、库落错地方；`RWEG_BIN` 保持 POSIX 形态（`/c/Users/me/.rweg/bin`），因为 MSYS 的 PATH 以 `:` 分隔，`C:/...` 会被盘符冒号切开。工具侧另有 `config.NativePath`，`read -f /c/proj/x.ts` 这类参数写法也照收。
 
@@ -89,7 +87,7 @@ edit -f src/app.ts -c nVR:nVR "const x = 42;"
 write -f src/new.ts -c "export const a = 1;"
 ```
 
-（非侵入模式下 `read` / `write` / `edit` / `replace` / `grep` 要写 `hread` / `hwrite` / `hedit` / `hreplace` / `hgrep`；`undo` / `append` / `prepend` 两种模式同名。下文各节同此。）
+（`replace` 只有 `h*` 形态：`hreplace`；`read` / `write` / `edit` / `grep` 同名与 `h*` 两套都可用，`undo` / `append` / `prepend` 亦然。下文各节同此。）
 
 换项目：改钉住的配置路径（或重开终端）。`source` 时钉住，之后 `cd` 不改判落点：
 
@@ -110,7 +108,7 @@ $ unset RWEG_PIN_CONFIG                      # 回到"每次按 cwd 现找"
 
 ## 工具
 
-八个工具与 `core-rweg` 及其子命令皆认 `-h` / `--help` / `help`：`read -h`、`replace -h`、`grep -h`、`core-rweg cfg -h` 打的都是 rweg 自己的用法。grep 是唯一例外：只有裸 `grep -h` / `grep help` / `grep --help` 是帮助 —— 带模式 / 路径的 `grep -h` 按 GNU 语义是 `--no-filename`，照样搜索（rg 的 `-h` 是帮助，转发前会翻译成长写法）。下文用接管后的短名 `read` / `write` / `edit` / `replace` / `grep` / `undo` / `append` / `prepend`；非侵入模式下这四个与 `grep` 写作 `hread` / `hwrite` / `hedit` / `hreplace` / `hgrep`（`replace` 不占系统那个名字 —— Windows 自带 `System32\replace.exe`，故它只有 `h*` 形态），`undo` / `append` / `prepend` 两种模式同名，参数与输出完全一致。给 Agent 的完整约定：`core-rweg prompt`。
+八个工具与 `core-rweg` 及其子命令皆认 `-h` / `--help` / `help`：`read -h`、`replace -h`、`grep -h`、`core-rweg cfg -h` 打的都是 rweg 自己的用法。grep 是唯一例外：只有裸 `grep -h` / `grep help` / `grep --help` 是帮助 —— 带模式 / 路径的 `grep -h` 按 GNU 语义是 `--no-filename`，照样搜索（rg 的 `-h` 是帮助，转发前会翻译成长写法）。下文用短名 `read` / `write` / `edit` / `replace` / `grep` / `undo` / `append` / `prepend`；`replace` 的短名只在 `hreplace` 里成立（不占系统那个名字 —— Windows 自带 `System32\replace.exe`），其余七个同名与 `h*` 两套都有，参数与输出完全一致。给 Agent 的完整约定：`core-rweg prompt`。
 
 ### 无锚形态 `-fn`
 
@@ -541,11 +539,10 @@ core-rweg doctor      # 环境自检（路径 / 配置 / 库 / rg / 自检向量
 ├── scripts/
 │   ├── build.sh            编译 + 铺产物（./dist/）+ selftest
 │   ├── install.sh          装到 $RWEG_HOME
-│   ├── env.sh              非侵入入口：h* 名字
-│   ├── env.aggressive.sh   侵入入口：同名接管 + cd 提示
+│   ├── env.sh              唯一入口：h* 名字 + 同名接管 read/write/edit/grep
 │   ├── env.restore.sh      反注册：source 它恢复内置
-│   ├── shell-test.sh       shell 层验收 84 项
-│   └── e2e-test.sh         e2e 288 项
+│   ├── shell-test.sh       shell 层验收 80 项
+│   └── e2e-test.sh         e2e 304 项
 ├── dist-home/rweg.toml     安装级配置模板
 ├── examples/project-rweg.toml  项目级配置模板
 ├── rweg.toml               本仓库配置
@@ -555,9 +552,9 @@ core-rweg doctor      # 环境自检（路径 / 配置 / 库 / rg / 自检向量
 ### 测验
 
 ```bash
-go test ./internal/...        # 264 个用例（209 个测试函数）
-./scripts/shell-test.sh       # 84 项：builtin 覆盖 / source 输出 / PATH / 幂等 / 配置钉住 / 退出码 / 反注册
-./scripts/e2e-test.sh         # 288 项：锚点稳定性 / 校验链 / 原子性 / 编码 / diff 形态 / replace（含多组改动）/ 简写 / undo / -h / prompt
+go test ./internal/...        # 268 个用例（213 个测试函数）
+./scripts/shell-test.sh       # 80 项：builtin 覆盖 / source 输出 / PATH / 幂等 / 配置钉住 / 退出码 / 反注册
+./scripts/e2e-test.sh         # 304 项：锚点稳定性 / 校验链 / 原子性 / 编码 / diff 形态 / replace（含多组改动）/ 简写 / undo / -h / prompt
 ```
 
 二者都真跑已装的 `$RWEG_HOME`，故改完先 `./scripts/build.sh && ./scripts/install.sh`。`build.sh` 与 `e2e-test.sh` 会把自己算出的路径经 `cygpath` 交给原生 `go`/`core-rweg.exe`（见其中 `native()`）：`MSYS_NO_PATHCONV=1` 的 shell（dsh 等 agent shell）里，`go build -o /c/...` 会写到 `C:\c\...`，dist 里留旧货 —— 表现为"改了代码、编译也过了，跑起来还是老行为"。

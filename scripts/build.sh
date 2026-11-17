@@ -6,9 +6,8 @@
 #   ├── bin/
 #   │   └── core-rweg.exe        ← 唯一二进制；工具入口是它的子命令
 #   ├── scripts/
-#   │   ├── env.sh               ← 非侵入：h* 别名 + undo / append / prepend（原名）
-#   │   ├── env.aggressive.sh    ← 强行接管 read / write / edit / grep（cd 另加提示）
-#   │   └── env.restore.sh       ← 反注册：把接管层拆掉，恢复内置
+#   │   ├── env.sh               ← 唯一入口：h* 别名 + undo / append / prepend（原名）
+#   │   └── env.restore.sh       ← 反注册：把 env.sh 装的东西拆掉，恢复内置
 #   ├── db/
 #   └── rweg.toml
 #
@@ -57,9 +56,8 @@ done
 
 echo "==> stage scripts + config"
 cp -f "$_root/scripts/env.sh" "$_dist/scripts/env.sh"
-cp -f "$_root/scripts/env.aggressive.sh" "$_dist/scripts/env.aggressive.sh"
 cp -f "$_root/scripts/env.restore.sh" "$_dist/scripts/env.restore.sh"
-chmod +x "$_dist/scripts/env.sh" "$_dist/scripts/env.aggressive.sh" "$_dist/scripts/env.restore.sh" 2>/dev/null || true
+chmod +x "$_dist/scripts/env.sh" "$_dist/scripts/env.restore.sh" 2>/dev/null || true
 cp -f "$_root/dist-home/rweg.toml" "$_dist/rweg.toml"
 
 if [ "$run_test" = "1" ]; then

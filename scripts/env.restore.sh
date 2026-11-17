@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
-# rweg env.restore.sh — 反注册 env.aggressive.sh 装的那层同名函数，
-# 默认把 env.aggressive.sh 那一层拆掉：read / write / edit / grep 与 cd 还给 bash 内置与 PATH。
+# rweg env.restore.sh — 反注册 env.sh 装进当前 shell 的一切。
 #
 # 用法（**必须 source**：要改的是当前 shell 的函数表）：
-#     source ~/.rweg/scripts/env.restore.sh          # 只拆同名接管层
-#     source ~/.rweg/scripts/env.restore.sh --all    # 连 env.sh 那层一起拆
+#     source ~/.rweg/scripts/env.restore.sh          # 只拆同名命令（read / write / edit / grep）
+#     source ~/.rweg/scripts/env.restore.sh --all    # h* 层与 PATH / ns / 配置钉住也一并拆
 #
 # 只拆 rweg 自己装的，判据两条同时成立：同名的 h* 函数在（hread / hwrite / …），
-# 且函数体里出现 `"$_rweg_core" <工具名>` 转发（aggressive 层各函数的真实形状）；
-# cd 认两条文案之一 —— env.sh 那层的 "WARN: do not 'cd' to same destination"
-# 与 aggressive 那层的 "cd command ERROR: do not call"。
+# 且函数体里出现 `"$_rweg_core" <工具名>` 转发（转发函数的真实形状）。
 # 别的来源的同名函数原样保留，并在 stderr 说一声是谁占着。
 # `unset -f` 会连带清掉 BASH_FUNC_* 导出，
 # 所以从那之后起的子进程也回到内置。
@@ -41,7 +38,7 @@ esac
 _rweg_dropped=""
 _rweg_kept=""
 
-# --- 1. 接管层（env.aggressive.sh 装的同名命令）：带 rweg 痕迹的才拆 ---
+# --- 1. 同名命令层（env.sh export -f 出去的 read / write / edit / grep）：带 rweg 痕迹的才拆 ---
 #      undo / append / prepend 是 env.sh 装的不重名函数，不在这一层，--all 才拆。
 #
 # 判据用**源码形状**（declare -f 打印的就是源码，变量不展开）：
@@ -62,16 +59,6 @@ for _rweg_fn in read write edit grep; do
 	unset -f "$_rweg_fn"
 	_rweg_dropped="$_rweg_dropped $_rweg_fn"
 done
-_rweg_body="$(declare -f cd 2>/dev/null)" || _rweg_body=""
-if [ -n "$_rweg_body" ]; then
-	case "$_rweg_body" in
-		*"cd command ERROR: do not call"* | *"WARN: do not 'cd' to same destination"*)
-			unset -f cd
-			_rweg_dropped="$_rweg_dropped cd"
-			;;
-		*) _rweg_kept="$_rweg_kept cd" ;;
-	esac
-fi
 
 # --- 2. --all：env.sh 那层（h* / PATH / ns / 配置钉住）也拆 ---
 if [ "$_rweg_all" = 1 ]; then
@@ -87,8 +74,6 @@ if [ "$_rweg_all" = 1 ]; then
 		export PATH
 	fi
 	unset RWEG_NS RWEG_PIN_CONFIG RWEG_HOME RWEG_BIN _rweg_core
-	# cd 包装用过的全局（local 化之前的旧包装会留它；顺手清，回到"从未 source 过"）。
-	unset last__cwd
 fi
 
 if [ -n "$_rweg_kept" ]; then
@@ -98,7 +83,7 @@ if [ -n "${RWEG_VERBOSE:-}" ] && [ "${RWEG_VERBOSE}" != "0" ]; then
 	if [ "$_rweg_all" = 1 ]; then
 		echo "rweg 反注册（--all）：同名命令与 h* 层都已拆，PATH / ns 恢复原状" >&2
 	else
-		echo "rweg 反注册：read/write/edit/grep/cd 回到内置与 PATH（env.sh 那层保留，--all 可一并拆）" >&2
+		echo "rweg 反注册：read/write/edit/grep 回到内置与 PATH（env.sh 那层保留，--all 可一并拆）" >&2
 	fi
 fi
 
