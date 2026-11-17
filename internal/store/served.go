@@ -18,13 +18,13 @@ import (
 // Served 是一个文件的"模型已见"锚点镜像。
 //
 // hashes[i] 是第 i+1 行的锚点；空串表示该行**未 serve**。
-// 这是 §7 校验链第 1、2 步的唯一依据。
+// 这是 edit 校验链第 1、2 步的唯一依据。
 type Served struct {
 	// Path 归一化后的绝对路径（Windows 上小写）。
 	Path string
 	// Hashes 长度恒等于被读取时的行数。
 	Hashes []string
-	// Canons 是 serve 时的 canon，用于格式漂移检测（§7.1 第 4 步）。
+	// Canons 是 serve 时的 canon，用于格式漂移检测（校验链第 4 步）。
 	Canons []string
 	// LineCount 是快照时的行数。
 	LineCount int
@@ -134,7 +134,7 @@ func (d *DB) GetServed(path string) (*Served, error) {
 // ServeLines 把指定行标记为已 serve，并记录锚点。
 //
 // 这是 read 的核心写操作：**多范围的所有行都会被标记**，
-// 所以任意 serve 过的锚点都能用于后续 edit（plan §6.2）。
+// 所以任意 serve 过的锚点都能用于后续 edit。
 //
 // anchors 必须是**全文件**的锚点数组（长度 == 文件行数），
 // 本方法只挑 lines 里的那些写进 served。

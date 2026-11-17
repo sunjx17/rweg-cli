@@ -267,7 +267,7 @@ func parseGrepArgs(args []string) *grepArgs {
 
 // runGrep 是 grep 的实现。
 //
-// 四条路径（plan §6.5）：
+// 四条路径：
 //
 //  1. 无路径参数（管道输入）       → 完全透传 rg
 //  2. rg 不可用 / 执行失败         → 回退系统 grep，退出码一并透传
@@ -695,7 +695,6 @@ func matchCount(hits []hitLine) string {
 // loadForGrep 加载文件并算出锚点/ canons。
 func loadForGrep(c *Ctx, abs string) (*docfile.Doc, []string, []string, error) {
 	doc, err := docfile.Load(abs, docfile.Options{
-		MaxLines:     c.Res.Cfg.Read.MaxLines,
 		MaxLineBytes: c.Res.Cfg.Read.MaxLineBytes,
 	})
 	if err != nil {

@@ -51,7 +51,7 @@ const agentPrompt = `# rweg 工具约定（贴进 Agent 的 system prompt）
 ## 命令
 
     read  FILE [RANGE ...] [--encoding ENC] [--no-serve]
-          RANGE := N（单行）| N:M（闭区间）| N-（N 至文末）| -M（文首至 M）
+          RANGE := N（单行）| N:M（闭区间，N-M 同义）| N-（N 至文末）| -M（文首至 M）
           不给 RANGE 即读全文；多范围可乱序、可重叠，输出按行号合并排序。
           一次全读上限 max_lines = 20000 行，超出标 truncated（只影响这一次输出）。
           --no-serve 只读不记：锚点照常输出但不进基线，不能直接拿去 edit。

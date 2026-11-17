@@ -68,7 +68,6 @@ func runUndo(c *Ctx, args []string) error {
 	lines := 0
 	if entry.Existed {
 		doc, err := docfile.Load(target, docfile.Options{
-			MaxLines:     c.Res.Cfg.Read.MaxLines,
 			MaxLineBytes: c.Res.Cfg.Read.MaxLineBytes,
 		})
 		if err != nil {

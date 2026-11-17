@@ -82,9 +82,13 @@ type Hash struct {
 }
 
 // Read 是 [read] 段。
+//
+// 两个上限都只管**输出**：加载永远按真实行数与完整行内容进行，
+// 否则范围校验、锚点基线与写回都会拿着假行数工作。
 type Read struct {
 	MaxLineBytes int `toml:"max_line_bytes"`
-	MaxLines     int `toml:"max_lines"`
+	// MaxLines 是一次 read 输出的总行数上限，超出截断并标 truncated。
+	MaxLines int `toml:"max_lines"`
 }
 
 // Edit 是 [edit] 段。

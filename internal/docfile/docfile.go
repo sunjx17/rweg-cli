@@ -1,7 +1,10 @@
 // Package docfile 负责把磁盘文件加载成可锚定的行数组。
 //
-// 它处理所有"读文件会踩到的坑"：二进制探测、BOM、CRLF、编码、行数上限。
+// 它处理所有"读文件会踩到的坑"：二进制探测、BOM、CRLF、编码、超长行。
 // 上层（read/edit/write）只关心 Lines 与 Newline，不用再操心这些。
+//
+// DOC 里的 Lines 恒为文件的**全部**行：行数上限是 read 的输出约束，
+// 不是加载约束——截断加载会让越界检查、锚点基线与写回都以假行数工作。
 package docfile
 
 import (
@@ -59,20 +62,16 @@ type Doc struct {
 	LineEnds []string
 	// TrailingNewline 记录原文件是否以行尾结尾（写回时保持）。
 	TrailingNewline bool
-	// Truncated 为真表示因 max_lines 被截断。
-	Truncated bool
 	// LongLines 记录超出 max_line_bytes 的行号（1-based）。
 	// 这些行**没有锚点**——锚点需要完整行。
 	LongLines []int
 }
 
-// LineCount 返回行数。
+// LineCount 返回行数。恒等于文件的真实行数——加载阶段不截断。
 func (d *Doc) LineCount() int { return len(d.Lines) }
 
 // Options 控制加载行为。
 type Options struct {
-	// MaxLines 为 0 表示不限制；超过则截断并置 Truncated。
-	MaxLines int
 	// MaxLineBytes 为 0 表示不限制；超出的行只给标记不给锚点。
 	MaxLineBytes int
 	// Encoding 为空表示自动探测（UTF-8 优先，失败则报错列出候选）。
@@ -188,13 +187,7 @@ func Parse(absPath string, raw []byte, size int64, opts Options) (*Doc, error) {
 		d.LineEnds = ends
 	}
 
-	// --- 5. 行数上限 ---
-	if opts.MaxLines > 0 && len(d.Lines) > opts.MaxLines {
-		d.Lines = d.Lines[:opts.MaxLines]
-		d.Truncated = true
-	}
-
-	// --- 6. 超长行标记 ---
+	// --- 5. 超长行标记 ---
 	if opts.MaxLineBytes > 0 {
 		for i, ln := range d.Lines {
 			if len(ln) > opts.MaxLineBytes {

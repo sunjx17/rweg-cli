@@ -13,8 +13,8 @@ func wantNative(in string) string {
 		return in
 	}
 	switch in {
-	case "/c/Users/sun/.rweg":
-		return `C:\Users\sun\.rweg`
+	case "/c/Users/me/.rweg":
+		return `C:\Users\me\.rweg`
 	case "/d/tools/rweg":
 		return `D:\tools\rweg`
 	case "/C/windows":
@@ -25,11 +25,11 @@ func wantNative(in string) string {
 
 func TestNativePath(t *testing.T) {
 	cases := []string{
-		"/c/Users/sun/.rweg", // Git Bash 的盘符写法
+		"/c/Users/me/.rweg", // Git Bash 的盘符写法
 		"/d/tools/rweg",
 		"/C/windows",     // 大写盘符
-		`C:\Users\sun`,   // 已是原生
-		"C:/Users/sun",   // 原生 + 正斜杠
+		`C:\Users\me`,    // 已是原生
+		"C:/Users/me",    // 原生 + 正斜杠
 		".db/",           // 相对路径
 		"/tmp/x",         // 无盘符，推不出盘，原样
 		"/c",             // 太短
@@ -46,8 +46,8 @@ func TestNativePath(t *testing.T) {
 // $RWEG_HOME 允许写成 /c/... ：MSYS_NO_PATHCONV=1 的 shell（dsh）不替
 // 环境变量做转换，若原样使用会拼出 C:\c\... 这种盘根怪目录。
 func TestHomeAcceptsMsysPath(t *testing.T) {
-	t.Setenv("RWEG_HOME", "/c/Users/sun/.rweg")
-	want := wantNative("/c/Users/sun/.rweg")
+	t.Setenv("RWEG_HOME", "/c/Users/me/.rweg")
+	want := wantNative("/c/Users/me/.rweg")
 	if got := Home(); got != want {
 		t.Errorf("Home() = %q, want %q", got, want)
 	}

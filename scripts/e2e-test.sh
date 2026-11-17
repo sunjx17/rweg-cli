@@ -341,6 +341,44 @@ contains "json 有锚点数组" '"CTt"' "$js"
 contains "json 有 line_count" '"line_count": 6' "$js"
 
 # ─────────────────────────────────────────────────────────────
+section G2 "read 输出上限 max_lines：不参与行数判定，也不写坏长文件"
+# ─────────────────────────────────────────────────────────────
+new_sandbox src
+# 上限压到 20 行：超过 20 行的文件足以逼出「把上限当真实行数」的老 bug。
+printf '[db]
+dir = ".db/"
+[read]
+max_lines = 20
+' > "$_sb/rweg.toml"
+seq 1 300 > "$_sb/long.txt"
+
+check "头部行数是真实行数" "# long.txt (300 lines, lf)" 	"$(rsh "$_sb" read -f long.txt 1:3 2>/dev/null | sed -n 1p)"
+check "上限之外的范围可读" "250:255:" 	"$(rsh "$_sb" read -f long.txt 250:255 2>/dev/null | sed -n 2p)"
+check "上限之外的行内容正确" "250" 	"$(rsh "$_sb" read -f long.txt 250:250 2>/dev/null | sed -n 3p | awk -F"$SEP" '{print $2}')"
+check "上限之外的 N- 可读" "298:300:" 	"$(rsh "$_sb" read -f long.txt 298- 2>/dev/null | sed -n 2p)"
+check "N-M 闭区间可读" "295:300:" 	"$(rsh "$_sb" read -f long.txt 295-300 2>/dev/null | sed -n 2p)"
+
+err="$(rsh "$_sb" read -f long.txt 301 2>&1 >/dev/null)"
+contains "E_RANGE 提示真实行数" "300 line(s)" "$err"
+
+# 整份读：头部说真实行数并标 truncated，块只到上限
+check "整份读：头部真实行数 + truncated" "# long.txt (300 lines, lf, truncated)" 	"$(rsh "$_sb" read -f long.txt 2>/dev/null | sed -n 1p)"
+check "整份读：块头截到上限" "1:20:" 	"$(rsh "$_sb" read -f long.txt 2>/dev/null | sed -n 2p)"
+check "整份读：内容 20 行" "20" 	"$(rsh "$_sb" read -fn long.txt 2>/dev/null | sed -n '3,$p' | wc -l | tr -d ' ')"
+check "多块共用一个输出额度" "1:10: 50:59: " 	"$(rsh "$_sb" read -f long.txt 1:10 50:60 2>/dev/null | grep '^[0-9]*:[0-9]*:$' | tr '
+' ' ')"
+
+# 有能力读第 250 行，就意味着它能被编辑；编辑不得把文件写短
+anchor250="$(rsh "$_sb" read -f long.txt 250:250 2>/dev/null | sed -n 3p | awk -F"$SEP" '{print $1}')"
+rsh "$_sb" edit -f long.txt -c "$anchor250:$anchor250" "line two five zero" >/dev/null 2>&1
+check "上限之外的行可编辑（rc）" "0" "$?"
+check "编辑后文件仍是 300 行" "300" "$(wc -l < "$_sb/long.txt" | tr -d ' ')"
+check "编辑后目标行已改" "line two five zero" "$(sed -n 250p "$_sb/long.txt")"
+
+rsh "$_sb" grep -n "299" long.txt >/dev/null 2>&1
+check "grep 命中上限之外的行（rc）" "0" "$?"
+
+# ─────────────────────────────────────────────────────────────
 section H "grep：锚点化 / 三条回退路径"
 # ─────────────────────────────────────────────────────────────
 new_sandbox src
@@ -840,10 +878,14 @@ fi
 out="$(rsh "$_sb" read -f long.txt 2>/dev/null)"
 contains "超长行为 ~~~（不给锚点）" "~~~${SEP}yyy" "$out"
 contains "超长行的邻居照旧有锚点" "${SEP}tail" "$out"
-# 一次全读上限 max_lines = 20000 → 标 truncated
+# 一次全读上限 max_lines = 20000：只截输出并标 truncated，头部行数仍是真实行数
 seq 1 20001 > "$_sb/many.txt"
-contains "全读上限标 truncated" "(20000 lines, lf, truncated)" \
+contains "全读上限标 truncated" "(20001 lines, lf, truncated)" \
         "$(rsh "$_sb" read -f many.txt 2>/dev/null | sed -n 1p)"
+check "全读上限只裁到第 20000 行" "1:20000:" \
+        "$(rsh "$_sb" read -f many.txt 2>/dev/null | sed -n 2p)"
+check "第 20001 行仍可按范围读到" "20001:20001:" \
+        "$(rsh "$_sb" read -f many.txt 20001 2>/dev/null | sed -n 2p)"
 
 # ─────────────────────────────────────────────────────────────
 section S "replace：范围内子串 / 正则替换"

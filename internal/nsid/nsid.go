@@ -35,8 +35,7 @@ const (
 
 	// hashDigits / timeDigits 是 ns 两段的长度。
 	//
-	// plan §4.2 正文写"前 5 位 + 后 5 位，长度 11"——自相矛盾。
-	// 以它给的示例 wK3fP-9xT2q 为准：hash 4 位 + 时间 5 位 = 11 字符。
+	// ns 形如 wK3fP-9xT2q：hash 4 位 + '-' + 时间 5 位 = 11 字符。
 	// 4 位 base62 = 1477633 种组合，对 cwd+配置目录 足够。
 	hashDigits = 4
 	timeDigits = 5

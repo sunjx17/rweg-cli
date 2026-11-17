@@ -139,7 +139,6 @@ func runInsert(c *Ctx, args []string) error {
 	file := a.file
 
 	doc, err := docfile.Load(file, docfile.Options{
-		MaxLines:     c.Res.Cfg.Read.MaxLines,
 		MaxLineBytes: c.Res.Cfg.Read.MaxLineBytes,
 	})
 	if err != nil {

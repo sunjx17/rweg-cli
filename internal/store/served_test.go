@@ -173,7 +173,7 @@ func TestServeLinesNoopOnEmptySet(t *testing.T) {
 	}
 }
 
-// --- IndexOf：重复锚点必须能被发现（§7.1 exact-boundary）---
+// --- IndexOf：重复锚点必须能被发现（exact-boundary）---
 
 func TestIndexOf(t *testing.T) {
 	s := &Served{Hashes: []string{"CTt", "Um7", "CTt", "yAZ"}}

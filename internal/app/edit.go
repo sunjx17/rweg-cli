@@ -208,7 +208,7 @@ func runEdit(c *Ctx, args []string) error {
 // 不为每种动作另开分支。
 // verb 是成功输出的动词（edited / replaced / appended / prepended）。
 //
-// 流程（plan §7.1）：
+// 流程：
 //
 //	加载当前文件 → 算当前锚点 → 取 served → 校验链 → 应用 → 原子落盘 → 写库 → 输出
 //
@@ -228,7 +228,6 @@ func applyEdit(c *Ctx, file string, ops []edit.Op, verb string) error {
 	}
 
 	doc, err := docfile.Load(file, docfile.Options{
-		MaxLines:     c.Res.Cfg.Read.MaxLines,
 		MaxLineBytes: c.Res.Cfg.Read.MaxLineBytes,
 	})
 	if err != nil {

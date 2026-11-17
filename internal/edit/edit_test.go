@@ -8,7 +8,7 @@ import (
 	"rweg/internal/hashline"
 )
 
-// canonical 是 plan §2.4 的 6 行样例，锚点已与参考实现逐字节对齐。
+// canonical 是设计文档的 6 行样例，锚点已与参考实现逐字节对齐。
 func canonical() ([]string, []string) {
 	lines := []string{
 		"function hello() {",
@@ -81,7 +81,7 @@ func TestStaleAnchor(t *testing.T) {
 	}
 }
 
-// TestWhitespaceDriftKeepsAnchor 锁死"canon 剔空白"这条设计（plan §2.2）：
+// TestWhitespaceDriftKeepsAnchor 锁死"canon 剔空白"这条设计：
 // formatter 只做空白重排时锚点不该轮换。
 func TestWhitespaceDriftKeepsAnchor(t *testing.T) {
 	lines, h := canonical()
@@ -225,7 +225,7 @@ func TestUnsortedOpsAreSorted(t *testing.T) {
 
 // --- 应用 ---
 
-// TestApplyReplacesWithStableAnchors 锁死 plan §2.4 的实测值：
+// TestApplyReplacesWithStableAnchors 锁死 canonical 样例的实测锚点值：
 // 第 4 行替换成 3 行后，未动的 5 行锚点 100% 保留。
 func TestApplyReplacesWithStableAnchors(t *testing.T) {
 	lines, h := canonical()

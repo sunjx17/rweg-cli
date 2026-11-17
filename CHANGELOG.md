@@ -65,6 +65,17 @@
 
 ### 修复
 
+- **`read` 把 `[read].max_lines` 当成文件真实行数**：加载阶段按上限截断 `Doc.Lines`，
+  于是 1665 行的文件报 `(200 lines, lf, truncated)`，第 201 行往后一律
+  `E_RANGE line 943 out of range (file has 200 line(s))` —— 显式范围、`N-`、编辑、
+  undo 全部够不到，头部与错误提示还一起说谎。现在装载层**永不截断**，
+  `max_lines` 只在 `read` 物化输出时施加（`ranges.Limit`：块内截断、其后的块丢弃），
+  行数判定、`E_RANGE` 提示、头部行数一律用真实行数；被截掉的行不 serve。
+  同一处隐患一并消掉：`edit` / `replace` / `append` / `prepend` 此前也在截断后的
+  行数组上编辑并整份写回，长文件一次编辑就会把文件写成前 `max_lines` 行。
+- `read` 接受 `N-M`（与 `N:M` 同义）：此前 `read 295-300` 报
+  `E_RANGE "295-300": not a number`，`N-` 与 `-M` 都收，唯独最自然的闭区间写法被拒，
+  还被误报成越界。
 - `env.restore.sh` 反注册失效（两层都拆不掉）：接管层判据改为源码形状
   `"$_rweg_core"` + `" 工具名"`（旧判据找 `hread` 字样，aggressive 函数体里
   根本没有）；cd 判据补上 env.sh 层的 "WARN: do not 'cd' to same destination"。

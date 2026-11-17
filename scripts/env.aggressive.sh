@@ -97,7 +97,7 @@ cd(){
 	# 退出码与内置 cd 一致；行为差异只有提示。
 	# ⚠️ "cd command ERROR: do not call" 是本层的判识痕迹：
 	# env.restore.sh 靠它认领这层并 unset -f cd。改文案要同步 env.restore.sh。
-	echo "WARNING:cd command is not recommended in this shell." >&2 # 给不太聪明的agent的提示，避免它在shell里过度cd；aggressive默认开启。
+	echo "WARNING:cd command is not recommended in this shell." >&2 # 给 agent 的提示，避免它在 shell 里过度 cd；aggressive 默认开启。
 	local last__cwd
 	last__cwd="$(pwd)"
 	if ! builtin cd "$@"; then

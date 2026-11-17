@@ -131,7 +131,6 @@ func runReplace(c *Ctx, args []string) error {
 	}
 
 	doc, err := docfile.Load(a.file, docfile.Options{
-		MaxLines:     c.Res.Cfg.Read.MaxLines,
 		MaxLineBytes: c.Res.Cfg.Read.MaxLineBytes,
 	})
 	if err != nil {

@@ -95,7 +95,7 @@ func parseWriteArgs(args []string) (*writeArgs, error) {
 
 // runWrite 是 write 的实现。
 //
-// 语义（plan §6.3）：
+// 语义：
 //   - 文件不存在 → 创建（**目录必须已存在**，否则 E_NO_DIR）
 //   - 文件存在 → 全量替换（保留原文件的行尾风格与 BOM）
 //   - 写完**自动 serve 全文**并回传锚点，省一次 read
@@ -147,7 +147,6 @@ func runWrite(c *Ctx, args []string) error {
 	// 注意这里解析的是**内存里的 UTF-8 文本**；最终落盘的字节由
 	// RenderEncoded 按 doc.Encoding 编码 —— 编码只在最后一步起作用。
 	doc, err := docfile.Parse(abs, []byte(content), int64(len(content)), docfile.Options{
-		MaxLines:     c.Res.Cfg.Read.MaxLines,
 		MaxLineBytes: c.Res.Cfg.Read.MaxLineBytes,
 	})
 	if err != nil {
@@ -168,7 +167,6 @@ func runWrite(c *Ctx, args []string) error {
 	if fi, err := os.Stat(abs); err == nil && !fi.IsDir() {
 		existed = true
 		if old, err := docfile.Load(abs, docfile.Options{
-			MaxLines:     c.Res.Cfg.Read.MaxLines,
 			MaxLineBytes: c.Res.Cfg.Read.MaxLineBytes,
 		}); err == nil {
 			doc.Newline = old.MajorityNewline()

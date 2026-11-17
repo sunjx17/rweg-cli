@@ -45,7 +45,7 @@ probe_stride = 3907
 
 [read]
 max_line_bytes = 6000 # 单行超此值只给标记，不给锚点（锚点需要完整行）
-max_lines = 20000     # 单文件行数上限，超出截断并标 truncated
+max_lines = 20000     # 一次 read 输出的总行数上限，超出在块内截断并标 truncated（不参与行数判定）
 
 [edit]
 max_changes = 32      # 单次 -c 数量上限（同文件原子批量）

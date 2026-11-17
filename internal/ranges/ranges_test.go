@@ -19,6 +19,10 @@ func TestParseForms(t *testing.T) {
 		{"3:7", 3, 7},
 		{"1:10", 1, 10},
 		{"7:7", 7, 7}, // 单元素闭区间
+		// N-M 是 N:M 的同义写法
+		{"3-7", 3, 7},
+		{"7-7", 7, 7},
+		{" 3 - 7 ", 3, 7},
 		{"8-", 8, 10},
 		{"1-", 1, 10},
 		{"10-", 10, 10},
@@ -345,5 +349,50 @@ func TestScenarioG(t *testing.T) {
 		if !set.Has(l) {
 			t.Errorf("line %d should be served", l)
 		}
+	}
+}
+
+// --- 输出上限 ---
+
+func TestLimitUnderCap(t *testing.T) {
+	rs := []Range{{1, 5}, {10, 20}}
+	got, cut := Limit(rs, 100)
+	if cut {
+		t.Error("should not truncate")
+	}
+	if len(got) != 2 || got[0] != rs[0] || got[1] != rs[1] {
+		t.Fatalf("got %v, want unchanged", got)
+	}
+}
+
+func TestLimitZeroMeansNoCap(t *testing.T) {
+	rs := []Range{{1, 5}, {10, 20}}
+	got, cut := Limit(rs, 0)
+	if cut || len(got) != 2 {
+		t.Fatalf("got %v cut=%v, want unchanged", got, cut)
+	}
+}
+
+func TestLimitCutsInsideBlock(t *testing.T) {
+	got, cut := Limit([]Range{{1, 5}, {10, 20}}, 7)
+	if !cut {
+		t.Fatal("should truncate")
+	}
+	if len(got) != 2 || got[0] != (Range{1, 5}) || got[1] != (Range{10, 11}) {
+		t.Fatalf("got %v, want 1:5 + 10:11", got)
+	}
+}
+
+func TestLimitDropsLaterBlocks(t *testing.T) {
+	got, cut := Limit([]Range{{1, 5}, {10, 20}, {30, 40}}, 5)
+	if !cut || len(got) != 1 || got[0] != (Range{1, 5}) {
+		t.Fatalf("got %v cut=%v, want only 1:5", got, cut)
+	}
+}
+
+func TestLimitExactFit(t *testing.T) {
+	got, cut := Limit([]Range{{1, 5}, {10, 14}}, 10)
+	if cut || len(got) != 2 {
+		t.Fatalf("got %v cut=%v, want both blocks", got, cut)
 	}
 }

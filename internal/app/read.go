@@ -32,7 +32,7 @@ type readArgs struct {
 //
 //	read -f FILE [RANGE ...] [--encoding ENC] [--no-serve]
 //
-// RANGE 是位置参数：1:3 / 5 / 8- / -4。
+// RANGE 是位置参数：1:3 / 1-3 / 5 / 8- / -4。
 //
 // **以 `-` 开头的位置参数必须放行**：`-4` 是"文件开头到 4 行"，
 // 不是 flag。所以这里不按 `-` 前缀一律拒绝，而是先试着用 ranges 解析，
@@ -97,11 +97,12 @@ func parseReadArgs(args []string) (*readArgs, error) {
 // runRead 是 read 的实现。
 //
 // 流程：
-//  1. 加载文件（编码/BOM/行尾/二进制探测）
-//  2. 解析并合并范围
-//  3. 计算锚点（优先用 snapshot 缓存 + retired 预留）
-//  4. 写库：把范围内的行标记为 served
-//  5. 输出：每块 FROM:TO: + 每行 锚点│内容
+//  1. 加载文件（编码/BOM/行尾/二进制探测；始终整份加载，行数即真实行数）
+//  2. 按真实行数解析并合并范围
+//  3. 按 [read].max_lines 裁剪输出块（只裁输出，不改行数判定）
+//  4. 计算锚点（优先用 snapshot 缓存 + retired 预留）
+//  5. 写库：把这次实际输出的行标记为 served
+//  6. 输出：每块 FROM:TO: + 每行 锚点│内容
 func runRead(c *Ctx, args []string) error {
 	a, err := parseReadArgs(args)
 	if err != nil {
@@ -109,7 +110,6 @@ func runRead(c *Ctx, args []string) error {
 	}
 
 	doc, err := docfile.Load(a.file, docfile.Options{
-		MaxLines:     c.Res.Cfg.Read.MaxLines,
 		MaxLineBytes: c.Res.Cfg.Read.MaxLineBytes,
 		Encoding:     a.encoding,
 	})
@@ -117,6 +117,8 @@ func runRead(c *Ctx, args []string) error {
 		return translateDocError(err, a.file)
 	}
 
+	// 行数取文件的真实长度：范围校验、E_RANGE 提示、输出头部都用它。
+	// [read].max_lines 只是输出上限，在 range 解析之后才施加。
 	lineCount := doc.LineCount()
 	if lineCount == 0 {
 		return BizErr("E_EMPTY  %s is empty", displayPath(a.file)).
@@ -131,13 +133,15 @@ func runRead(c *Ctx, args []string) error {
 	if err != nil {
 		return bizRangeError(err, a.file, lineCount)
 	}
+	// 输出上限：真实行数已经进了校验，这里只决定这次打出多少行。
+	blocks, truncated := ranges.Limit(merged, c.Res.Cfg.Read.MaxLines)
 
 	// -fn：只要内容，不锚定 —— 不算锚点、不写 served、不输出行锚。
 	if a.noAnchor {
 		if c.JSON {
-			return emitReadJSON(os.Stdout, doc, merged, nil)
+			return emitReadJSON(os.Stdout, doc, blocks, nil, truncated)
 		}
-		emitReadPlain(os.Stdout, doc, merged, c.Quiet)
+		emitReadPlain(os.Stdout, doc, blocks, truncated, c.Quiet)
 		return nil
 	}
 
@@ -146,10 +150,10 @@ func runRead(c *Ctx, args []string) error {
 		return err
 	}
 
-	// 4. 标记 served（多范围的所有行）
+	// 4. 标记 served（多范围的所有行；被 max_lines 截掉的行不 serve）
 	if !a.noServe {
 		set := ranges.NewSet(lineCount)
-		for _, r := range merged {
+		for _, r := range blocks {
 			set.AddRange(r.Start, r.End)
 		}
 		canons := make([]string, lineCount)
@@ -164,9 +168,9 @@ func runRead(c *Ctx, args []string) error {
 
 	// 5. 输出
 	if c.JSON {
-		return emitReadJSON(os.Stdout, doc, merged, anchors)
+		return emitReadJSON(os.Stdout, doc, blocks, anchors, truncated)
 	}
-	emitReadText(os.Stdout, doc, merged, anchors, c.Quiet)
+	emitReadText(os.Stdout, doc, blocks, anchors, truncated, c.Quiet)
 	return nil
 }
 
@@ -201,20 +205,23 @@ func anchorsFor(c *Ctx, doc *docfile.Doc) ([]string, error) {
 
 // emitReadText 渲染人读的锚点输出。
 //
-// 格式（plan §6.2）：
+// 格式：
 //
 //	# src/app.ts (6 lines, lf)
 //	1:6:
 //	CTt│function hello() {
 //	Um7│  console.log("world");
 //
+// 文件比 [read].max_lines 长时，块只到上限为止，头部行数仍是文件真实行数，
+// 另加 truncated 标记 —— 行数说文件有多长，标记说这次没打全。
+//
 // 超长行不给锚点，只给占位标记 —— 锚点需要完整行。
-func emitReadText(w io.Writer, doc *docfile.Doc, blocks []ranges.Range, anchors []string, quiet bool) {
+func emitReadText(w io.Writer, doc *docfile.Doc, blocks []ranges.Range, anchors []string, truncated, quiet bool) {
 	var b strings.Builder
 
 	if !quiet {
 		b.WriteString("# " + displayPath(doc.Path))
-		b.WriteString(" (" + formatLineCount(doc) + ")")
+		b.WriteString(" (" + formatLineCount(doc, truncated) + ")")
 		b.WriteString("\n")
 	}
 
@@ -237,12 +244,12 @@ func emitReadText(w io.Writer, doc *docfile.Doc, blocks []ranges.Range, anchors 
 // emitReadPlain 渲染 -fn 形态的 read：与 emitReadText 同结构，但没有行锚。
 //
 // 超长行不再需要 `~~~` 占位 —— 没有锚点要占位。
-func emitReadPlain(w io.Writer, doc *docfile.Doc, blocks []ranges.Range, quiet bool) {
+func emitReadPlain(w io.Writer, doc *docfile.Doc, blocks []ranges.Range, truncated, quiet bool) {
 	var b strings.Builder
 
 	if !quiet {
 		b.WriteString("# " + displayPath(doc.Path))
-		b.WriteString(" (" + formatLineCount(doc) + ")")
+		b.WriteString(" (" + formatLineCount(doc, truncated) + ")")
 		b.WriteString("\n")
 	}
 
@@ -256,8 +263,9 @@ func emitReadPlain(w io.Writer, doc *docfile.Doc, blocks []ranges.Range, quiet b
 	io.WriteString(w, b.String())
 }
 
-// formatLineCount 渲染行数与文件特征，例 "6 lines, lf, bom"。
-func formatLineCount(doc *docfile.Doc) string {
+// formatLineCount 渲染真实行数与文件特征，例 "6 lines, lf, bom"。
+// truncated 表示这次输出被 [read].max_lines 截断（行数仍然是文件真实长度）。
+func formatLineCount(doc *docfile.Doc, truncated bool) string {
 	parts := []string{fmt.Sprintf("%d line", doc.LineCount())}
 	if doc.LineCount() != 1 {
 		parts[0] += "s"
@@ -279,13 +287,14 @@ func formatLineCount(doc *docfile.Doc) string {
 	if doc.Encoding != docfile.EncodingUTF8 {
 		parts = append(parts, doc.Encoding)
 	}
-	if doc.Truncated {
+	if truncated {
 		parts = append(parts, "truncated")
 	}
 	return strings.Join(parts, ", ")
 }
 
 // readJSON 是 --json 的输出结构。
+// line_count 是文件真实行数；truncated 表示 blocks 被 [read].max_lines 截断。
 type readJSON struct {
 	Path      string            `json:"path"`
 	LineCount int               `json:"line_count"`
@@ -307,11 +316,11 @@ type readJSONBlock struct {
 	Content []string `json:"content,omitempty"`
 }
 
-func emitReadJSON(w io.Writer, doc *docfile.Doc, blocks []ranges.Range, anchors []string) error {
+func emitReadJSON(w io.Writer, doc *docfile.Doc, blocks []ranges.Range, anchors []string, truncated bool) error {
 	out := readJSON{
 		Path:      doc.Path,
 		LineCount: doc.LineCount(),
-		Truncated: doc.Truncated,
+		Truncated: truncated,
 		Newline:   doc.Newline,
 		BOM:       doc.HasBOM,
 		Encoding:  doc.Encoding,
@@ -365,7 +374,7 @@ func bizRangeError(err error, file string, lineCount int) error {
 	return &Error{
 		Code:    ExitUsage,
 		Message: err.Error(),
-		Hint: fmt.Sprintf("%s has %d line(s); valid forms: N | N:M | N- | -M",
+		Hint: fmt.Sprintf("%s has %d line(s); valid forms: N | N:M | N-M | N- | -M",
 			displayPath(file), lineCount),
 	}
 }

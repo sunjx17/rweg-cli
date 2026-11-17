@@ -59,13 +59,13 @@ $RWEG_HOME/                缺省 ~/.rweg
 
 接管层（`env.aggressive.sh`）为什么要立函数：`read` / `write` / `edit` 在 Git Bash 中为 bash 内置，而 bash 解析之序为函数 > 内置 > PATH。故只把 `$RWEG_HOME/bin` 前置到 PATH 无效（何况 `bin/` 里现在只有 `core-rweg`，没有 `read` / `grep` 可抢）；不改的话 `read -f app.ts 1:3` 会为内置 `read` 所吞，报 `read: -f: invalid option`。
 
-`env.aggressive.sh` 为 `read` / `write` / `edit` / `grep` 这四个同名命令各立转发函数（转发到对应的 `h*`），并 `export -f`；否则 `bash script.sh` 子进程中复为内置。`cd` 包装函数是**例外，不 export**：它只在本 shell 做交互提示，导出后每个子脚本都会继承它，`root="$(cd … && pwd)"` 这类命令替换会把警告文本一起收进变量（rweg 自己的 `build.sh` 曾因此崩）；提示本身也走 stderr，不脏 stdout。
+`env.aggressive.sh` 为 `read` / `write` / `edit` / `grep` 这四个同名命令各立转发函数（直接调 `core-rweg` 子命令），并 `export -f`；否则 `bash script.sh` 子进程中复为内置。`cd` 包装函数是**例外，不 export**：它只在本 shell 做交互提示，导出后每个子脚本都会继承它，`root="$(cd … && pwd)"` 这类命令替换会把警告文本一起收进变量；提示本身也走 stderr，不脏 stdout。
 
 接管层的 `read` 转发判据 —— **只在下列情形归 rweg**：出现 `-f` / `--file` / `--json` / `--no-serve` / `--encoding` / `--quiet` / `-h`；零参数；或简写 `read FILE [RANGE ...]`（首个参数是**存在的文件**，且其后全是范围写法；名字带不带 `.` 或 `/` 都认，`notes`、`Makefile` 这类无扩展名文件同样是文件）。其余（`read line`、`read -r line`、`read -p …`、`read -a arr`）原样交还 `builtin read` —— 函数随 `export -f` 进入每个子 bash，若一律转发，脚本里遍地都是的 `while read -r x` 会撞 `unknown flag "-r" for read`。零参数归 rweg（报缺 `-f`，退出码 2）：交给内置会在交互式终端上一直等一行输入，agent 一敲即卡。要 bash 原生语义写 `builtin read`；`grep` 本非内置，要系统 grep 走 `/usr/bin/grep`。非侵入模式下不存在这个问题：`read` / `grep` 根本没被碰。
 
 同上，接管层交还 builtin 的那一侧带**有界等待**（`RWEG_READ_TIMEOUT`，缺省 5 秒，`0` / `off` / `no` 关闭）：agent 的 stdin 是挂在控制台上的字符设备，`[ -t 0 ]` 为真却无人输入，无重定向的 `builtin read` 会一直等一行永不来临的输入直到外层命令超时（shell 被重置，`RWEG_NS` 一并丢）。超时返回码 >128，stderr 提示改用 `read FILE`。代价是空闲超过该值的管道（如 `tail -f log | while read -r l`）会提前结束：这类写法用 `builtin read`（不经本函数）或把上限置 0。
 
-`env.sh` 导出的两种路径形态各归其位：`RWEG_HOME` 为原生形态（`C:/Users/sun/.rweg`），供 core-rweg 等原生程序使用 —— MSYS 不替其它环境变量做转换，若给 `/c/...`，`filepath.Join` 会拼出 `C:\c\...`（当前盘根），安装级 `rweg.toml` 找不到、库落错地方；`RWEG_BIN` 保持 POSIX 形态（`/c/Users/sun/.rweg/bin`），因为 MSYS 的 PATH 以 `:` 分隔，`C:/...` 会被盘符冒号切开。工具侧另有 `config.NativePath`，`read -f /c/proj/x.ts` 这类参数写法也照收。
+`env.sh` 导出的两种路径形态各归其位：`RWEG_HOME` 为原生形态（`C:/Users/me/.rweg`），供 core-rweg 等原生程序使用 —— MSYS 不替其它环境变量做转换，若给 `/c/...`，`filepath.Join` 会拼出 `C:\c\...`（当前盘根），安装级 `rweg.toml` 找不到、库落错地方；`RWEG_BIN` 保持 POSIX 形态（`/c/Users/me/.rweg/bin`），因为 MSYS 的 PATH 以 `:` 分隔，`C:/...` 会被盘符冒号切开。工具侧另有 `config.NativePath`，`read -f /c/proj/x.ts` 这类参数写法也照收。
 
 doctor 检 PATH 首位（两种形态皆认）；shell 层由 `scripts/shell-test.sh` 验之。
 
@@ -146,12 +146,14 @@ read -f FILE [RANGE ...]
 
 ```
 RANGE := N       单行
-       | N:M     含首尾闭区间
+       | N:M     含首尾闭区间（N-M 同义）
        | N-      N 至文末
        | -M      文首至 M
 ```
 
 不予 RANGE，则读全文。多范围可乱序、可重叠；重叠与相邻者合并，合并后按起点排序。输出与输入顺序无涉。
+
+范围一律按**文件真实行数**校验与解析：`[read].max_lines` 只是这次输出的总行数上限，超出即在块内截断并标 `truncated`，头部行数仍是真实行数；被截掉的行不会伪造出「文件只有 N 行」，显式范围照样能读到文件末尾。
 
 ```bash
 $ read -f src/app.ts 1:6
@@ -166,6 +168,7 @@ yAZ│let y = 2;
 
 $ read -f src/app.ts 4-        # 4 至末尾
 $ read -f src/app.ts -3        # 开头至 3（"-3" 以 - 开头，非 flag）
+$ read -f src/app.ts 2-4       # 2 至 4（与 2:4 等价）
 $ read -f src/app.ts 1:3 5:6   # 两块；第 4 行未 serve
 ```
 
@@ -439,7 +442,7 @@ core-rweg prompt          # 打印整段模板
 - 空白不参与锚点。`canon` 剔所有 ASCII 空白，故 formatter 只重排空白时锚不轮换。代价：字符串字面量内空白变化亦不可见（`"x y"` 与 `"xy"` 同码）。
 - 区间外改动不阻塞。唯目标区间内部变则拒；区间外漂移不影响写入正确性，位置漂移由逐行比对兜住。
 - 锚点值 = 行内容的哈希 + 该行在文件内的出现序号（3 位 base62），故**内容相同的行在不同文件里会得到同一个锚点值**；各文件各算基线，写时文件名与锚点都要对上。
-- 一 ns 一库；读取上限缺省 `max_lines = 20000` 行（超出标 `truncated`），单行上限 `max_line_bytes = 6000` 字节（超出该行只给 `~~~`，不能用于 `edit`）。
+- 一 ns 一库；读取上限缺省 `max_lines = 20000` 行——只限一次 `read` 的输出总量，超出在块内截断并标 `truncated`，不参与行数判定（长文件任何一行都能用显式范围读到、编辑到）；单行上限 `max_line_bytes = 6000` 字节（超出该行只给 `~~~`，不能用于 `edit`）。
 
 ---
 
@@ -473,7 +476,7 @@ probe_stride = 3907
 
 [read]
 max_line_bytes = 6000     # 超出者只给标记，不给锚点（超长行无法构造锚点）
-max_lines = 20000         # 一次全读的行数上限，超出截断并标 truncated
+max_lines = 20000         # 一次 read 输出的总行数上限，超出在块内截断并标 truncated（行数判定仍用真实行数）
 
 [edit]
 max_changes = 32          # 单次 -c 数量上限

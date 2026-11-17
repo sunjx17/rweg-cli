@@ -93,7 +93,7 @@ func runTool(tool Tool, args []string) error {
 
 // passthroughGrep 把参数交给系统 grep / rg。
 //
-// 这是 P5 的**回退路径**（plan §6.5）：rg 不在 PATH、或用户喂的是管道
+// 这是 grep 的**回退路径**：rg 不在 PATH、或用户喂的是管道
 // 而没能给出明确路径时，rweg 不假装自己知道锚点，直接把活交出去。
 //
 // 两个目标的短选项表不同，所以参数有两份：
@@ -197,12 +197,14 @@ func toolHelp(tool Tool) string {
 		return `read -f FILE [RANGE ...] [--encoding ENC]
 
 RANGE := N            单行
-       | N:M          含首尾的闭区间
+       | N:M          含首尾的闭区间（N-M 同义）
        | N-           N 到文件末尾
        | -M           文件开头到 M
 
 不给 RANGE 时默认读整个文件（超过 max_lines 截断并标 truncated；单行超过
 max_line_bytes 的行只给标记，不给锚点）。
+max_lines 只是这次输出的总行数上限：范围按文件真实行数校验，文件多长都能
+用显式范围读到；头部行数始终是真实行数，被截断另标 truncated。
 输出每行 ` + hashline.Sep + `内容。读到的行记入 served，锚点可直接用于 edit。
 --no-serve 只读不记：锚点照常输出，但不进 served —— 拿它们 edit 会报
 E_NEVER_READ / E_STALE_RANGE（用于不想动基线的一次性查看）。

@@ -1,4 +1,4 @@
-// Package edit 实现 edit 的校验链与原地应用（plan §7）。
+// Package edit 实现 edit 的校验链与原地应用。
 //
 // 设计原则：**fail-closed**。
 // 宁可多一次 read，也绝不基于未经 read 的信息写入。
@@ -133,7 +133,7 @@ func (v *Validated) Ranges() []ranges.Range {
 	return out
 }
 
-// Check 执行校验链第 1–4 步（plan §7.1）：
+// Check 执行校验链第 1–4 步：
 //
 //  1. F 是否被 serve 过？       否 → E_NEVER_READ
 //  2. h1/h2 是否在 served 里？  否 → E_UNKNOWN_ANCHOR

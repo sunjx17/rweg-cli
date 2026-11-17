@@ -9,7 +9,7 @@ import (
 
 // NativePath 把 MSYS / Git Bash 风格路径翻成 Windows 原生路径：
 //
-//	/c/Users/sun/.rweg   ->  C:\Users\sun\.rweg
+//	/c/Users/me/.rweg   ->  C:\Users\me\.rweg
 //	/d/tools/rweg/bin    ->  D:\tools\rweg\bin
 //
 // 其它形态（C:\x、C:/x、相对路径、/tmp 这类无盘符者）原样返回；
@@ -17,7 +17,7 @@ import (
 //
 // 为什么必须做这一步：MSYS 通常替原生子进程转换**参数**与部分环境变量，
 // 但 MSYS_NO_PATHCONV=1 时（dsh 之类的 agent shell 就这么设）什么都不转。
-// 于是 $RWEG_HOME=/c/Users/sun/.rweg 原样进来，filepath.Join 拼出
+// 于是 $RWEG_HOME=/c/Users/me/.rweg 原样进来，filepath.Join 拼出
 // "\c\Users\..."（= 当前盘根下的 C:\c\...）：安装级 rweg.toml 找不到、
 // 库落到盘根怪目录、read -f /c/proj/x.ts 报"文件不存在"。
 func NativePath(p string) string {

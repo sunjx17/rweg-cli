@@ -2,6 +2,7 @@ package docfile
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -382,28 +383,20 @@ func TestNormalizeEnc(t *testing.T) {
 	}
 }
 
-// --- 上限 ---
+// --- 行数 ---
 
-func TestMaxLinesTruncates(t *testing.T) {
-	d := parse(t, "1\n2\n3\n4\n5\n", Options{MaxLines: 3})
-	if d.LineCount() != 3 {
-		t.Errorf("LineCount = %d, want 3", d.LineCount())
+// 加载不截断：长文件的 Lines 必须与真实行数一致 —— 行数上限是 read 的输出约束。
+func TestLoadKeepsEveryLine(t *testing.T) {
+	var sb strings.Builder
+	for i := 1; i <= 300; i++ {
+		fmt.Fprintf(&sb, "%d\n", i)
 	}
-	if !d.Truncated {
-		t.Error("Truncated should be true")
+	d := parse(t, sb.String(), Options{})
+	if d.LineCount() != 300 {
+		t.Fatalf("LineCount = %d, want 300", d.LineCount())
 	}
-	if d.Lines[2] != "3" {
-		t.Errorf("last line = %q, want 3", d.Lines[2])
-	}
-}
-
-func TestMaxLinesNotTruncatedWhenUnder(t *testing.T) {
-	d := parse(t, "1\n2\n", Options{MaxLines: 10})
-	if d.Truncated {
-		t.Error("should not truncate")
-	}
-	if d.LineCount() != 2 {
-		t.Errorf("LineCount = %d, want 2", d.LineCount())
+	if d.Lines[299] != "300" {
+		t.Errorf("last line = %q, want 300", d.Lines[299])
 	}
 }
 

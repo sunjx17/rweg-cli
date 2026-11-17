@@ -202,7 +202,7 @@ func TestEmitReadPlain(t *testing.T) {
 		Encoding: docfile.EncodingUTF8,
 	}
 	var b strings.Builder
-	emitReadPlain(&b, doc, []ranges.Range{{Start: 1, End: 2}}, false)
+	emitReadPlain(&b, doc, []ranges.Range{{Start: 1, End: 2}}, false, false)
 	got := b.String()
 	want := "# src/app.ts (2 lines, lf)\n1:2:\nfunction hello() {\n}\n"
 	if got != want {

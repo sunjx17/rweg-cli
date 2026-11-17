@@ -89,7 +89,7 @@ func TestPureHashesMatchReference(t *testing.T) {
 	}
 }
 
-// 同文件唯一（需求 6）：重复内容的两行 canon 相同 → 必须拿到不同锚点。
+// 同文件唯一：重复内容的两行 canon 相同 → 必须拿到不同锚点。
 func TestSameFileUniqueness(t *testing.T) {
 	lines := []string{"}", "}", "}", "}", "}"}
 	got := Pure(lines, DefaultProbeStride, nil)
@@ -111,7 +111,7 @@ func TestFormatOnlyChangeKeepsAnchor(t *testing.T) {
 	}
 }
 
-// 需求 1：编辑导致行号漂移，未动行的锚点必须保留。
+// 编辑导致行号漂移，未动行的锚点必须保留。
 func TestMapStableRetainsUntouchedAnchors(t *testing.T) {
 	old := []string{
 		"function hello() {",
@@ -160,9 +160,9 @@ func TestMapStableRetainsUntouchedAnchors(t *testing.T) {
 		t.Errorf("retained %d/5 untouched anchors, want 5", found)
 	}
 
-	// plan §2.4 实测：const x = 42; 应得 EPx
+	// canonical 样例实测：const x = 42; 应得 EPx
 	if newH[3] != "EPx" {
-		t.Errorf("new line 4 anchor = %s, want EPx (plan §2.4)", newH[3])
+		t.Errorf("new line 4 anchor = %s, want EPx", newH[3])
 	}
 	// 新文件内不得有重复
 	seen := map[string]bool{}

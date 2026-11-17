@@ -169,7 +169,7 @@ unset _rweg_src _rweg_dir _rweg_home_posix _rweg_home_native
 #   下一次调用只好重新派生 ns，于是撞上 strict_cwd 检查报
 #   E_NS_CWD_MISMATCH —— 一个"退出即清理"的优化，坑掉了同一终端内的正常使用。
 #
-# namespace 的实际回收本来就靠 TTL（默认 24h，见 §5.4），
+# namespace 的实际回收本来就靠 TTL（缺省 24h，即 [namespace] ttl_hours），
 # 终端关掉后数据库过期被清掉即可。**这里不做任何 EXIT 钩子。**
 #
 # 若确实要立刻释放：手动 `unset RWEG_NS` 或 `core-rweg gc --force`。
@@ -203,7 +203,7 @@ fi
 #
 # ⚠️ "WARN: do not 'cd' to same destination" 是本层的判识痕迹：
 # env.restore.sh 靠它认领这层并 unset -f cd。改文案要同步 env.restore.sh。
-# echo "WARNING:cd command is not recommended in this shell." >&2 # 给不太聪明的agent的提示，避免它在shell里过度cd；默认关闭，启用可取消注释。
+# echo "WARNING:cd command is not recommended in this shell." >&2 # 给 agent 的提示，避免它在 shell 里过度 cd；默认关闭，启用可取消注释。
 cd(){
 	local last__cwd
 	last__cwd="$(pwd)"
@@ -211,7 +211,8 @@ cd(){
 		return $?
 	fi
 	if [ "$last__cwd" = "$(pwd)" ]; then
-		# 给过度谨慎的agent的提示，避免它在shell里重复cd到同一路径（持久shell里没有必要每行都在开头加cd {cwd}，实际观察到agent很喜欢反复cd同一目录包括开发本项目的那位）。默认开启，停用只需注释掉。
+		# 给 agent 的提示，避免它在持久 shell 里重复 cd 到同一路径（每行开头加 cd {cwd} 没有必要）。
+		# 默认开启，停用只需注释掉。
 		echo "WARN: do not 'cd' to same destination more than twice. current cwd is already '$(pwd)'" >&2
 	else
 		# 给agent的提示，同样避免它在shell里重复cd到同一路径。默认开启，停用只需注释掉。

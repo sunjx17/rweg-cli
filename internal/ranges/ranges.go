@@ -1,9 +1,9 @@
 // Package ranges 解析并合并行范围。
 //
-// 语法（plan §6.2）：
+// 语法：
 //
 //	N       单行
-//	N:M     含首尾的闭区间
+//	N:M     含首尾的闭区间（N-M 同义）
 //	N-      N 到文件末尾
 //	-M      文件开头到 M
 //
@@ -77,8 +77,9 @@ func Parse(s string, lineCount int) (Range, error) {
 		return Range{Start: start, End: end}, nil
 	}
 
-	// 闭区间 N:M
-	if i := strings.Index(s, ":"); i >= 0 {
+	// 闭区间 N:M，也接受 N-M：连字符写法与 N- / -M 同源，读者最自然，
+	// 而它曾经被当成 "not a number" 报成越界错误。
+	if i := strings.IndexAny(s, ":-"); i >= 0 {
 		start, err := atoi(s[:i])
 		if err != nil {
 			return Range{}, fmt.Errorf("E_RANGE  %q: %w", raw, err)
@@ -196,6 +197,31 @@ func Total(rs []Range) int {
 		n += r.Len()
 	}
 	return n
+}
+
+// Limit 按总行数上限裁剪已归一化的区间列表，返回裁剪结果与是否发生截断。
+//
+// 只裁输出：区间本身已按真实行数解析过，这里按顺序发放行额，额度用尽即
+// 在块内截断并丢弃其后的块。max <= 0 表示不限制。
+func Limit(rs []Range, max int) ([]Range, bool) {
+	if max <= 0 {
+		return rs, false
+	}
+	out := make([]Range, 0, len(rs))
+	left := max
+	for _, r := range rs {
+		if left <= 0 {
+			return out, true
+		}
+		if r.Len() > left {
+			r.End = r.Start + left - 1
+			out = append(out, r)
+			return out, true
+		}
+		out = append(out, r)
+		left -= r.Len()
+	}
+	return out, false
 }
 
 // Set 是被 serve 的行号集合。

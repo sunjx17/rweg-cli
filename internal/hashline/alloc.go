@@ -8,7 +8,7 @@ import (
 // ErrHashSpace 表示 238328 个槽位全被占满。调用方应报 E_HASH_SPACE 并提示拆分文件。
 var ErrHashSpace = errors.New("E_HASH_SPACE: anchor space exhausted, split the file")
 
-// Allocator 维护一个文件内已占槽位，保证同文件锚点唯一（需求 6）。
+// Allocator 维护一个文件内已占槽位，保证同文件锚点唯一。
 //
 // 生命周期 = 一次「为某个文件计算锚点数组」的过程。
 // 238328 位 ≈ 29KB，直接用 []bool，够用且零依赖。
@@ -29,7 +29,7 @@ func NewAllocator(stride int) *Allocator {
 // Reserve 把一个已有锚点标记为已占。
 //
 // 继承旧锚点时必须先 Reserve 全部旧锚点，否则继承可能与新分配的锚点撞车
-// —— 见 plan §2.5。
+// —— 分配策略见 Allocator 的探测说明。
 func (a *Allocator) Reserve(h string) bool {
 	idx, ok := HashToIndex(h)
 	if !ok {
